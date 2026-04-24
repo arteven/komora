@@ -11,3 +11,8 @@ Fresh restart. Previous `komora` research and proof-of-concept work was archived
 - Build a personal sandbox runner around `microsandbox`
 - Support OpenCode and Claude workflows first
 - Keep the project focused on a practical local setup rather than the earlier Docker Sandboxes replacement idea
+
+## References
+
+- Microsandbox repository: https://github.com/superradcompany/microsandbox
+- Microsandbox docs: https://docs.microsandbox.dev/llms.txt
