@@ -20,4 +20,16 @@ describe("built-in profiles", () => {
     expect(p.name).toBe("python");
     expect(p.image).toContain("python");
   });
+
+  it("if dist/ exists, built-in yamls are copied next to compiled discovery.js", async () => {
+    const distDiscovery = path.join(builtinDir, "..", "..", "..", "dist", "profiles", "discovery.js");
+    try {
+      await fs.access(distDiscovery);
+    } catch {
+      return; // dist/ not built in this run; skip silently
+    }
+    const distBuiltin = path.join(path.dirname(distDiscovery), "builtin");
+    await expect(fs.access(path.join(distBuiltin, "nodejs.yaml"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(distBuiltin, "python.yaml"))).resolves.toBeUndefined();
+  });
 });
