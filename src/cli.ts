@@ -7,6 +7,7 @@ import { rm } from "./commands/rm.js";
 import { exec as execCmd } from "./commands/exec.js";
 import { create } from "./commands/create.js";
 import { start } from "./commands/start.js";
+import { run } from "./commands/run.js";
 
 const program = new Command();
 program.name("komora").description("Per-workspace microVM sandboxes for AI agents.").version("0.0.0");
@@ -34,5 +35,16 @@ program
   .description("Create a sandbox without running an agent.")
   .action((agent, opts) => create({ agent, profile: opts.profile, name: opts.name, workspaceDir: process.cwd() }));
 program.command("start <name>").description("Start a stopped sandbox.").action((n) => start(n));
+
+program
+  .command("run [agent]")
+  .option("--profile <name>")
+  .option("--name <override>")
+  .allowUnknownOption(true)
+  .description("Find-or-create the sandbox and run the agent (everything after `--` is forwarded).")
+  .action(async (agent, opts, command) => {
+    const argv = command.args.slice(1); // arguments after [agent]
+    process.exit(await run({ agent, profile: opts.profile, name: opts.name, argv, workspaceDir: process.cwd() }));
+  });
 
 program.parseAsync(process.argv);
