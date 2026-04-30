@@ -1,6 +1,6 @@
 {
   "name": "komora",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Per-workspace microVM sandboxes for AI coding agents.",
   "type": "module",
   "bin": {
