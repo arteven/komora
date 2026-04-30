@@ -17,7 +17,15 @@ export interface ListItem {
   status: "running" | "stopped";
 }
 
+export interface ExecCommand {
+  command: string;
+  args: string[];
+}
+
 export const msb = {
+  execCommand(sandbox: string, cmd: string, args: string[]): ExecCommand {
+    return { command: "msb", args: ["exec", sandbox, cmd, ...args] };
+  },
   async create(input: CreateInput): Promise<{ id: string }> {
     return sdk.create(input);
   },
