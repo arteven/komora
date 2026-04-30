@@ -13,4 +13,11 @@ describe("built-in profiles", () => {
     expect(p.name).toBe("nodejs");
     expect(p.image).toContain("node");
   });
+
+  it("python is valid against the schema", async () => {
+    const yaml = await fs.readFile(path.join(builtinDir, "python.yaml"), "utf8");
+    const p = parseProfile(yaml);
+    expect(p.name).toBe("python");
+    expect(p.image).toContain("python");
+  });
 });
