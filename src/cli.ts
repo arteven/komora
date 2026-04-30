@@ -9,6 +9,7 @@ import { create } from "./commands/create.js";
 import { start } from "./commands/start.js";
 import { run } from "./commands/run.js";
 import { logs } from "./commands/logs.js";
+import { configShow } from "./commands/config-show.js";
 
 const program = new Command();
 program.name("komora").description("Per-workspace microVM sandboxes for AI agents.").version("0.0.0");
@@ -48,5 +49,13 @@ program
     const argv = command.args.slice(1); // arguments after [agent]
     process.exit(await run({ agent, profile: opts.profile, name: opts.name, argv, workspaceDir: process.cwd() }));
   });
+
+program
+  .command("config")
+  .description("Config inspection.")
+  .command("show <agent>")
+  .option("--profile <name>")
+  .option("--json")
+  .action((agent, opts) => configShow({ agent, profile: opts.profile, workspaceDir: process.cwd(), json: !!opts.json }));
 
 program.parseAsync(process.argv);
