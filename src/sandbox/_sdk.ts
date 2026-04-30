@@ -200,4 +200,8 @@ export const sdk = {
       status: mapSdkStatus(h.status),
     }));
   },
+
+  async logs(_name: string, _onLine: (line: string) => void): Promise<void> {
+    throw new Error("sdk.logs: not implemented in V1");
+  },
 };

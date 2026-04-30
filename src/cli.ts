@@ -8,6 +8,7 @@ import { exec as execCmd } from "./commands/exec.js";
 import { create } from "./commands/create.js";
 import { start } from "./commands/start.js";
 import { run } from "./commands/run.js";
+import { logs } from "./commands/logs.js";
 
 const program = new Command();
 program.name("komora").description("Per-workspace microVM sandboxes for AI agents.").version("0.0.0");
@@ -35,6 +36,7 @@ program
   .description("Create a sandbox without running an agent.")
   .action((agent, opts) => create({ agent, profile: opts.profile, name: opts.name, workspaceDir: process.cwd() }));
 program.command("start <name>").description("Start a stopped sandbox.").action((n) => start(n));
+program.command("logs <name>").description("Stream the agent's stderr.").action((n) => logs(n));
 
 program
   .command("run [agent]")
