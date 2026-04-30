@@ -179,6 +179,15 @@ deferred to V2), so this caveat does not affect V1.
 - A future DinD-enabled profile is feasible without architectural changes; it just needs
   the raw-block fragment above plus DNS mitigation.
 
+## Decision: defer `kotlin-android` built-in to post-V1 (2026-04-30)
+
+Per Task 8.3's "skip-with-rationale" clause: the Android SDK image is ~10 GB and pre-
+provisioning it inside a microsandbox VM is not justified for a personal-sandbox V1.
+Built-ins shipped in V1: `nodejs` (Task 8.1) and `python` (Task 8.2). A `kotlin-android`
+profile remains feasible — DinD works (this spike) and a `gradle:8-jdk21` base image
+is reasonable — but Android SDK provisioning is left to per-project setup or a V2
+profile contribution.
+
 ## Reproducer
 
 ```bash

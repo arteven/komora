@@ -1,18 +1,39 @@
 # komora
 
-Personal sandboxes for OpenCode and Claude built on top of `microsandbox`.
+Per-workspace microVM sandboxes for AI coding agents — `claude`, `opencode`, anything else with a CLI.
 
-## Status
+## Quick start
 
-Fresh restart. Previous `komora` research and proof-of-concept work was archived onto the local branch `archive/komora-research`.
+```bash
+# from the root of any project
+echo 'agent: claude
+profile: nodejs' > komora.config.yaml
 
-## Current intent
+komora secrets set GITHUB_TOKEN
+komora run claude
+```
 
-- Build a personal sandbox runner around `microsandbox`
-- Support OpenCode and Claude workflows first
-- Keep the project focused on a practical local setup rather than the earlier Docker Sandboxes replacement idea
+## Editor IntelliSense
 
-## References
+Add this header to `komora.config.yaml`:
 
-- Microsandbox repository: https://github.com/superradcompany/microsandbox
-- Microsandbox docs: https://docs.microsandbox.dev/llms.txt
+```yaml
+# yaml-language-server: $schema=https://komora.dev/schema/v1.json
+```
+
+## Commands
+
+| | |
+|---|---|
+| `komora run <agent> [-- <args>]` | Find-or-create the sandbox and run the agent. |
+| `komora create <agent>` | Create a sandbox without running an agent. |
+| `komora start <name>` | Start a stopped sandbox. |
+| `komora exec <name> <cmd>` | Run a one-off command. Errors if not running. |
+| `komora stop <name>` | Stop a running sandbox. |
+| `komora rm <name>` | Remove a sandbox (auto-stops first). |
+| `komora ls` | List sandboxes. |
+| `komora logs <name>` | Stream the agent's stderr. |
+| `komora config show <agent>` | Print the resolved config. |
+| `komora secrets {set,list,rm}` | Manage stored secrets. |
+
+See `docs/superpowers/specs/2026-04-30-komora-v1-design.md` for the full design.
