@@ -42,6 +42,8 @@ export interface ResolvedConfig {
   agent: string;
   profile: Profile;        // post-merge: env, mounts, secrets, startup all applied
   raw: Record<string, unknown>;
+  /** Repo-opted-in subset of profile.secrets.allowed names (preserves repo `allow` order). */
+  secretsAllow: string[];
   workspaceDir: string;
   workspaceSlug: string;
   sandboxName: string;

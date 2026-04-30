@@ -56,6 +56,26 @@ describe("resolveConfig", () => {
     expect(r.profile.secrets?.allowed?.map((s) => s.name)).toContain("GITHUB_TOKEN");
   });
 
+  it("exposes opted-in subset on ResolvedConfig.secretsAllow", () => {
+    const r = resolveConfig({
+      profile: baseProfile,
+      repoConfig: { agent: "claude", profile: "nodejs", secrets: { allow: ["GITHUB_TOKEN"] } },
+      workspaceDir: "/tmp/foo",
+      workspaceSlug: "foo",
+    });
+    expect(r.secretsAllow).toEqual(["GITHUB_TOKEN"]);
+  });
+
+  it("secretsAllow defaults to empty array when repo opts in to nothing", () => {
+    const r = resolveConfig({
+      profile: baseProfile,
+      repoConfig: { agent: "claude", profile: "nodejs" },
+      workspaceDir: "/tmp/foo",
+      workspaceSlug: "foo",
+    });
+    expect(r.secretsAllow).toEqual([]);
+  });
+
   it("rejects opting in to a secret the profile did not declare", () => {
     expect(() => resolveConfig({
       profile: baseProfile,

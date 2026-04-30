@@ -50,6 +50,7 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
       throw new Error(`repo config secrets.allow: '${name}' is not declared in profile '${profile.name}'`);
     }
   }
+  const secretsAllow = [...(repoConfig.secrets?.allow ?? [])];
 
   const raw = repoConfig.raw ?? {};
   for (const key of Object.keys(raw)) {
@@ -63,6 +64,7 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     agent: repoConfig.agent,
     profile: merged,
     raw,
+    secretsAllow,
     workspaceDir,
     workspaceSlug,
     sandboxName: sandboxName({ workspaceSlug, agent: repoConfig.agent, profile: profile.name, override: nameOverride }),
