@@ -171,6 +171,24 @@ A secret is exposed to a sandbox only if it appears in the resolved profile's `s
 
 At sandbox start, komora translates `(stored value × profile policy)` into either `msb --secret NAME=VALUE@HOST` flags or SDK `Secret.env(...)` calls (whichever the implementation chooses).
 
+### V2 Target: Host-Side Credential Proxy
+
+V1's runtime model passes the raw secret value into the microVM. This is acceptable for a personal sandbox but is the wrong long-term shape. The V2 target is the [Docker Sandbox kits](https://docs.docker.com/ai/sandboxes/customize/kits/) pattern: the real value stays on the host, only a placeholder enters the VM, and a host-side proxy substitutes the secret on outbound HTTPS requests to declared service domains. This requires (a) a host proxy process komora can manage, (b) microsandbox network egress routed through it, and (c) policy keyed on `network.serviceDomains` rather than per-secret `hosts`. None of this lands in V1; it is named here so the V1 schema does not paint us into a corner — see [Network Reservation](#network-reservation) below.
+
+### Network Reservation
+
+Profiles and repo configs reserve a top-level `network:` block for V2. V1 parses it (so editors with the schema header don't error), warns once if non-empty, and ignores it. Shape:
+
+```yaml
+network:
+  allowedDomains: ["github.com", "registry.npmjs.org"]
+  serviceDomains:
+    "api.github.com": github
+    "registry.npmjs.org": npm
+```
+
+This is borrowed verbatim from Docker kits. It lets V2 add network allowlisting and proxy-based credential injection without a schema break.
+
 ### CLI
 
 ```
@@ -222,13 +240,16 @@ These are notes for the implementation plan, not user-facing contracts. Recorded
 - Image digest / version pinning (schema reserved).
 - First-class `mcpServers:` profile block.
 - OS keychain integration for the secret store.
-- Host-firewall enforcement of `secrets.<name>.hosts`.
+- Host-side credential proxy (real values stay on host; see [V2 target](#v2-target-host-side-credential-proxy)).
+- Host-firewall enforcement of `secrets.<name>.hosts` and `network.allowedDomains`.
 - DinD verification inside microsandbox VMs.
+- Kit-compat distribution (OCI / git refs) once split-out makes sense.
 - Splitting built-in profiles into a sibling repo if cadence diverges.
 
 ## References
 
 - [Docker AI Sandboxes (`sbx`) — UX north star](https://docs.docker.com/ai/sandboxes/usage/)
+- [Docker Sandbox kits — V2 schema reference](https://docs.docker.com/ai/sandboxes/customize/kits/)
 - [microsandbox CLI reference](https://docs.microsandbox.dev/cli/sandbox-commands.md)
 - [microsandbox secrets docs](https://docs.microsandbox.dev/sandboxes/secrets.md)
 - [microsandbox image support](https://docs.microsandbox.dev/sandboxes/overview.md)
