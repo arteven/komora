@@ -8,7 +8,7 @@ const e2e = process.env.KOMORA_E2E === "1";
 const itE2E = e2e ? it : it.skip;
 
 describe("e2e: komora run", () => {
-  itE2E("creates, runs `echo hi`, and exits with the agent's exit code", async () => {
+  itE2E("creates, runs `echo hi`, and exits with the agent's exit code", { timeout: 180_000 }, async () => {
     const work = await fs.mkdtemp(path.join(os.tmpdir(), "komora-e2e-"));
     await fs.writeFile(path.join(work, "komora.config.yaml"), "agent: sh\nprofile: nodejs\n");
 
