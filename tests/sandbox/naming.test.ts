@@ -2,18 +2,15 @@ import { describe, it, expect } from "vitest";
 import { sandboxName } from "../../src/sandbox/naming.js";
 
 describe("sandboxName", () => {
-  it("joins workspace, agent, profile with dashes", () => {
-    expect(sandboxName({ workspaceSlug: "foo", agent: "claude", profile: "nodejs" }))
-      .toBe("foo-claude-nodejs");
+  it("joins workspace and agent", () => {
+    expect(sandboxName({ workspaceSlug: "komora", agent: "claude" })).toBe("komora-claude");
   });
 
-  it("uses the override when provided", () => {
-    expect(sandboxName({ workspaceSlug: "foo", agent: "claude", profile: "nodejs", override: "custom" }))
-      .toBe("custom");
+  it("uses override when provided", () => {
+    expect(sandboxName({ workspaceSlug: "komora", agent: "claude", override: "my-sandbox" })).toBe("my-sandbox");
   });
 
-  it("rejects an empty override", () => {
-    expect(() => sandboxName({ workspaceSlug: "foo", agent: "claude", profile: "nodejs", override: "" }))
-      .toThrow(/override.*empty/i);
+  it("throws on empty override", () => {
+    expect(() => sandboxName({ workspaceSlug: "komora", agent: "claude", override: "" })).toThrow("--name override must not be empty");
   });
 });
