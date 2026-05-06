@@ -1,4 +1,4 @@
-import type { Sandbox } from "microsandbox";
+import { type Sandbox, SandboxStillRunningError } from "microsandbox";
 import { msb } from "./msb.js";
 import { withSandboxLock } from "./lock.js";
 import { getSecret } from "../secrets/store.js";
@@ -87,14 +87,25 @@ export async function stopSandbox(name: string): Promise<void> {
   await msb.stop(name);
 }
 
+async function stopIfRunning(name: string): Promise<void> {
+  try {
+    const sandbox = await msb.connect(name);
+    await sandbox.stopAndWait();
+  } catch {
+    // already stopped or unreachable
+  }
+}
+
 export async function removeSandbox(name: string): Promise<void> {
   const status = await msb.status(name);
   if (status === "missing") return;
-  if (status === "running") {
-    const sandbox = await msb.connect(name);
-    await sandbox.stopAndWait();
-    await sandbox.removePersisted();
-  } else {
+  if (status === "running") await stopIfRunning(name);
+  try {
+    await msb.rm(name);
+  } catch (e) {
+    if (!(e instanceof SandboxStillRunningError)) throw e;
+    // stopAndWait resolved but SDK still sees it as running — retry once
+    await new Promise((r) => setTimeout(r, 500));
     await msb.rm(name);
   }
 }

@@ -191,7 +191,7 @@ describe("removeSandbox", () => {
     await removeSandbox("test");
     expect(msb.connect).toHaveBeenCalledWith("test");
     expect(mockSandbox.stopAndWait).toHaveBeenCalled();
-    expect(mockSandbox.removePersisted).toHaveBeenCalled();
+    expect(msb.rm).toHaveBeenCalledWith("test");
   });
 
   it("no-ops for missing sandbox", async () => {
