@@ -118,6 +118,14 @@ export function warnUnmappedRaw(
   );
 }
 
+export function buildSecretArgs(values: Record<string, string>): string[] {
+  const args: string[] = [];
+  for (const [name, value] of Object.entries(values)) {
+    args.push("--secret", `${name}=${value}`);
+  }
+  return args;
+}
+
 export const sdk = {
   async create(input: SdkCreateInput): Promise<{ id: string }> {
     warnUnmappedRaw(input.raw);

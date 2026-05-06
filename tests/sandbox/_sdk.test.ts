@@ -3,6 +3,7 @@ import {
   parseSecretArgs,
   mapSdkStatus,
   warnUnmappedRaw,
+  buildSecretArgs,
 } from "../../src/sandbox/_sdk.js";
 
 describe("parseSecretArgs", () => {
@@ -87,5 +88,19 @@ describe("warnUnmappedRaw", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toMatch(/cpus/);
     expect(warn.mock.calls[0][0]).toMatch(/memory/);
+  });
+});
+
+describe("buildSecretArgs", () => {
+  it("creates plain NAME=VALUE pairs", () => {
+    const args = buildSecretArgs({ ANTHROPIC_API_KEY: "sk-123", GITHUB_TOKEN: "ghp-456" });
+    expect(args).toEqual([
+      "--secret", "ANTHROPIC_API_KEY=sk-123",
+      "--secret", "GITHUB_TOKEN=ghp-456",
+    ]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(buildSecretArgs({})).toEqual([]);
   });
 });
