@@ -14,6 +14,7 @@ vi.mock("../../src/sandbox/msb.js", () => ({
     status: vi.fn(),
     create: vi.fn().mockResolvedValue(mockSandbox),
     start: vi.fn().mockResolvedValue(mockSandbox),
+    connect: vi.fn().mockResolvedValue(mockSandbox),
     stop: vi.fn().mockResolvedValue(undefined),
     rm: vi.fn().mockResolvedValue(undefined),
   },
@@ -93,15 +94,16 @@ describe("ensureSandbox v2", () => {
     expect(msb.start).toHaveBeenCalledOnce();
   });
 
-  it("starts sandbox to get handle when already running", async () => {
+  it("connects to sandbox when already running", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("running");
-    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.connect).mockResolvedValue(mockSandbox);
 
     const sandbox = await ensureSandbox(makeCfg());
 
     expect(msb.create).not.toHaveBeenCalled();
-    expect(msb.start).toHaveBeenCalledOnce();
+    expect(msb.start).not.toHaveBeenCalled();
+    expect(msb.connect).toHaveBeenCalledOnce();
     expect(sandbox).toBe(mockSandbox);
   });
 

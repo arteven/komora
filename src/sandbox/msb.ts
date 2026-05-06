@@ -25,6 +25,9 @@ export const msb = {
   async start(name: string): Promise<Sandbox> {
     return sdk.start(name);
   },
+  async connect(name: string): Promise<Sandbox> {
+    return sdk.connect(name);
+  },
   async stop(name: string): Promise<void> {
     return sdk.stop(name);
   },

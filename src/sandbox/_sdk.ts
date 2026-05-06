@@ -177,6 +177,11 @@ export const sdk = {
     return Sandbox.start(name);
   },
 
+  async connect(name: string): Promise<Sandbox> {
+    const handle = await Sandbox.get(name);
+    return handle.connect();
+  },
+
   /**
    * Stop a sandbox by name. Idempotent: if the sandbox is not present in
    * `Sandbox.list()` (already removed, never created), this resolves

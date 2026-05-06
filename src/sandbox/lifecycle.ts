@@ -77,7 +77,7 @@ export async function ensureSandbox(
     } else if (status === "stopped") {
       return msb.start(cfg.sandboxName);
     } else {
-      return msb.start(cfg.sandboxName);
+      return msb.connect(cfg.sandboxName);
     }
   });
 }
