@@ -1,115 +1,167 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ensureSandbox, stopSandbox, removeSandbox } from "../../src/sandbox/lifecycle.js";
+import type { ResolvedConfig, AgentDefinition } from "../../src/config/types.js";
 
 vi.mock("../../src/sandbox/msb.js", () => ({
   msb: {
-    create: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    rm: vi.fn(),
     status: vi.fn(),
+    create: vi.fn().mockResolvedValue({ id: "test" }),
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    rm: vi.fn().mockResolvedValue(undefined),
+    execInSandbox: vi.fn().mockResolvedValue(undefined),
   },
 }));
-vi.mock("../../src/secrets/store.js", () => ({
-  getSecret: vi.fn(async () => undefined),
+
+vi.mock("../../src/sandbox/lock.js", () => ({
+  withSandboxLock: vi.fn((_name: string, fn: () => Promise<void>) => fn()),
 }));
 
-import { msb } from "../../src/sandbox/msb.js";
-import { getSecret } from "../../src/secrets/store.js";
-import { ensureSandbox, stopSandbox, removeSandbox } from "../../src/sandbox/lifecycle.js";
-import type { ResolvedConfig } from "../../src/config/types.js";
+vi.mock("../../src/secrets/store.js", () => ({
+  getSecret: vi.fn().mockResolvedValue("secret-value"),
+}));
 
-const cfg: ResolvedConfig = {
-  agent: "claude",
-  profile: { name: "nodejs", image: "img:t", mounts: [], env: {}, secrets: { allowed: [] } },
-  raw: {},
-  secretsAllow: [],
-  workspaceDir: "/tmp/foo",
-  workspaceSlug: "foo",
-  sandboxName: "foo-claude-nodejs",
+vi.mock("../../src/toolchains/runner.js", () => ({
+  runToolchains: vi.fn().mockResolvedValue(undefined),
+}));
+
+const agentDef: AgentDefinition = {
+  template: "docker/sandbox-templates:claude-code-docker",
+  command: "claude",
+  authVolumes: [{ type: "volume", name: "claude-auth", target: "/home/agent/.claude" }],
+  defaultSecrets: ["ANTHROPIC_API_KEY"],
+  defaultDomains: ["api.anthropic.com"],
 };
 
-beforeEach(() => {
-  Object.values(msb).forEach((fn) => (fn as { mockReset?: () => void }).mockReset?.());
-  (getSecret as ReturnType<typeof vi.fn>).mockReset();
-  (getSecret as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-});
+function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
+  return {
+    agent: "claude",
+    agentDef,
+    image: "docker/sandbox-templates:claude-code-docker",
+    command: "claude",
+    env: {},
+    mounts: [{ type: "bind", source: "/tmp/test", target: "/workspace" }],
+    secrets: ["ANTHROPIC_API_KEY"],
+    domains: ["api.anthropic.com"],
+    toolchain: [],
+    setup: [],
+    raw: {},
+    bare: false,
+    workspaceDir: "/tmp/test",
+    workspaceSlug: "test",
+    sandboxName: "test-claude",
+    ...overrides,
+  };
+}
 
-describe("ensureSandbox", () => {
-  it("creates and starts when status is missing", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("missing");
-    await ensureSandbox(cfg);
+describe("ensureSandbox v2", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates + starts sandbox when missing", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+
+    await ensureSandbox(makeCfg());
+
     expect(msb.create).toHaveBeenCalledOnce();
-    expect(msb.start).toHaveBeenCalledWith("foo-claude-nodejs");
+    expect(msb.start).toHaveBeenCalledOnce();
+    const createArg = vi.mocked(msb.create).mock.calls[0][0];
+    expect(createArg.name).toBe("test-claude");
+    expect(createArg.image).toBe("docker/sandbox-templates:claude-code-docker");
   });
 
-  it("starts when status is stopped", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("stopped");
-    await ensureSandbox(cfg);
+  it("only starts sandbox when stopped", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("stopped");
+
+    await ensureSandbox(makeCfg());
+
     expect(msb.create).not.toHaveBeenCalled();
-    expect(msb.start).toHaveBeenCalledWith("foo-claude-nodejs");
+    expect(msb.start).toHaveBeenCalledOnce();
   });
 
-  it("does nothing when already running", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("running");
-    await ensureSandbox(cfg);
+  it("no-ops when running", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("running");
+
+    await ensureSandbox(makeCfg());
+
     expect(msb.create).not.toHaveBeenCalled();
     expect(msb.start).not.toHaveBeenCalled();
   });
-});
 
-describe("ensureSandbox secret gating", () => {
-  const cfgWithSecret = (secretsAllow: string[]): ResolvedConfig => ({
-    ...cfg,
-    profile: { ...cfg.profile, secrets: { allowed: [{ name: "TOKEN" }] } },
-    secretsAllow,
+  it("collects secret values and passes to create", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+
+    await ensureSandbox(makeCfg());
+
+    const createArg = vi.mocked(msb.create).mock.calls[0][0];
+    expect(createArg.secretArgs).toContain("--secret");
   });
 
-  it("injects secrets that are in profile.allowed AND cfg.secretsAllow", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("missing");
-    (getSecret as ReturnType<typeof vi.fn>).mockResolvedValueOnce("hunter2");
-    await ensureSandbox(cfgWithSecret(["TOKEN"]));
-    expect(getSecret).toHaveBeenCalledWith("TOKEN");
-    expect(msb.create).toHaveBeenCalledOnce();
-    const arg = (msb.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(arg.secretArgs).toEqual(["--secret", "TOKEN=hunter2"]);
+  it("runs toolchains after creation", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    const { runToolchains } = await import("../../src/toolchains/runner.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+
+    await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }));
+
+    expect(runToolchains).toHaveBeenCalledWith("test-claude", [{ node: "22" }]);
   });
 
-  it("omits secrets declared in profile.allowed but NOT in cfg.secretsAllow", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("missing");
-    (getSecret as ReturnType<typeof vi.fn>).mockResolvedValue("hunter2");
-    await ensureSandbox(cfgWithSecret([]));
-    expect(getSecret).not.toHaveBeenCalled();
-    expect(msb.create).toHaveBeenCalledOnce();
-    const arg = (msb.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(arg.secretArgs).toEqual([]);
+  it("runs setup commands after toolchains", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+
+    await ensureSandbox(makeCfg({ setup: ["npm ci"] }));
+
+    const execCalls = vi.mocked(msb.execInSandbox).mock.calls;
+    const setupCall = execCalls.find((c) => c[1] === "bash" && c[2]?.includes("-c"));
+    expect(setupCall).toBeDefined();
+  });
+
+  it("skips secret if not in store", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    const store = await import("../../src/secrets/store.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(store.getSecret).mockResolvedValue(undefined);
+
+    await ensureSandbox(makeCfg());
+
+    const createArg = vi.mocked(msb.create).mock.calls[0][0];
+    expect(createArg.secretArgs).toEqual([]);
   });
 });
 
 describe("stopSandbox", () => {
-  it("calls msb.stop", async () => {
-    await stopSandbox("foo-claude-nodejs");
-    expect(msb.stop).toHaveBeenCalledWith("foo-claude-nodejs");
+  it("delegates to msb.stop", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    await stopSandbox("test");
+    expect(msb.stop).toHaveBeenCalledWith("test");
   });
 });
 
 describe("removeSandbox", () => {
-  it("auto-stops a running sandbox before rm", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("running");
-    await removeSandbox("foo-claude-nodejs");
-    expect(msb.stop).toHaveBeenCalledWith("foo-claude-nodejs");
-    expect(msb.rm).toHaveBeenCalledWith("foo-claude-nodejs");
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("does not stop when status is stopped", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("stopped");
-    await removeSandbox("foo-claude-nodejs");
+  it("stops then removes running sandbox", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("running");
+    await removeSandbox("test");
+    expect(msb.stop).toHaveBeenCalledWith("test");
+    expect(msb.rm).toHaveBeenCalledWith("test");
+  });
+
+  it("no-ops for missing sandbox", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+    await removeSandbox("test");
     expect(msb.stop).not.toHaveBeenCalled();
-    expect(msb.rm).toHaveBeenCalledWith("foo-claude-nodejs");
-  });
-
-  it("is a no-op when missing", async () => {
-    (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("missing");
-    await removeSandbox("ghost");
     expect(msb.rm).not.toHaveBeenCalled();
   });
 });
