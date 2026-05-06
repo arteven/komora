@@ -1,26 +1,37 @@
 import { describe, it, expect } from "vitest";
 import { execa } from "execa";
 import path from "node:path";
-import fs from "node:fs/promises";
 import os from "node:os";
+import fs from "node:fs/promises";
 
-const e2e = process.env.KOMORA_E2E === "1";
-const itE2E = e2e ? it : it.skip;
+const SKIP = !process.env.KOMORA_E2E;
+const CLI = path.resolve("src/cli.ts");
 
-describe("e2e: komora run", () => {
-  itE2E("creates, runs `echo hi`, and exits with the agent's exit code", { timeout: 180_000 }, async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "komora-e2e-"));
-    await fs.writeFile(path.join(work, "komora.config.yaml"), "agent: sh\nprofile: nodejs\n");
+describe.skipIf(SKIP)("e2e: komora run shell", { timeout: 180_000 }, () => {
+  let tmpDir: string;
 
-    const r = await execa("npx", ["tsx", path.resolve("src/cli.ts"), "run", "sh", "--", "-c", "echo hi"], {
-      cwd: work, reject: false,
+  it("boots shell sandbox, runs command, exits 0", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "komora-e2e-"));
+
+    const result = await execa("npx", ["tsx", CLI, "run", "shell", "--", "-c", "echo hello-from-sandbox"], {
+      cwd: tmpDir,
+      timeout: 120_000,
     });
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("hi");
 
-    await execa("npx", ["tsx", path.resolve("src/cli.ts"), "rm", `${path.basename(work)}-sh-nodejs`], {
-      cwd: work, reject: false,
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("hello-from-sandbox");
+  });
+
+  it("--dry-run prints config without booting", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "komora-e2e-"));
+
+    const result = await execa("npx", ["tsx", CLI, "run", "shell", "--dry-run"], {
+      cwd: tmpDir,
+      timeout: 10_000,
     });
-    await fs.rm(work, { recursive: true, force: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("shell-docker");
+    expect(result.stdout).toContain("sandboxName");
   });
 });
