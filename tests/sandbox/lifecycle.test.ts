@@ -7,6 +7,7 @@ const mockSandbox = vi.hoisted(() => ({
   shell: vi.fn().mockResolvedValue({ success: true, code: 0, stdout: () => "", stderr: () => "" }),
   attach: vi.fn(),
   stop: vi.fn(),
+  stopAndWait: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../../src/sandbox/msb.js", () => ({
@@ -185,8 +186,10 @@ describe("removeSandbox", () => {
   it("stops then removes running sandbox", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("running");
+    vi.mocked(msb.connect).mockResolvedValue(mockSandbox as any);
     await removeSandbox("test");
-    expect(msb.stop).toHaveBeenCalledWith("test");
+    expect(msb.connect).toHaveBeenCalledWith("test");
+    expect(mockSandbox.stopAndWait).toHaveBeenCalled();
     expect(msb.rm).toHaveBeenCalledWith("test");
   });
 

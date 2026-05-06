@@ -90,6 +90,9 @@ export async function stopSandbox(name: string): Promise<void> {
 export async function removeSandbox(name: string): Promise<void> {
   const status = await msb.status(name);
   if (status === "missing") return;
-  if (status === "running") await msb.stop(name);
+  if (status === "running") {
+    const sandbox = await msb.connect(name);
+    await sandbox.stopAndWait();
+  }
   await msb.rm(name);
 }
