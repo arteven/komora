@@ -1,52 +1,77 @@
 import { describe, it, expect } from "vitest";
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
-import { profileSchema } from "../../src/config/profile-schema.js";
-import { repoConfigSchema } from "../../src/config/schema.js";
+import { validateRepoConfig } from "../../src/config/schema.js";
 
-const ajv = new Ajv({ allErrors: true, strict: true });
-addFormats(ajv);
-
-describe("profileSchema", () => {
-  const validate = ajv.compile(profileSchema);
-
-  it("accepts a minimal valid profile", () => {
-    expect(validate({ name: "n", image: "img:tag" })).toBe(true);
+describe("v2 repo config schema", () => {
+  it("accepts empty config", () => {
+    expect(() => validateRepoConfig({})).not.toThrow();
   });
 
-  it("rejects a profile missing image", () => {
-    expect(validate({ name: "n" })).toBe(false);
+  it("accepts full config", () => {
+    expect(() =>
+      validateRepoConfig({
+        toolchain: [{ node: "22" }, { rust: "stable" }],
+        setup: ["npm install -g typescript"],
+        env: { NODE_ENV: "development" },
+        mounts: [{ type: "bind", source: "./data", target: "/workspace/data" }],
+        secrets: ["GITHUB_TOKEN", "NPM_TOKEN"],
+        network: {
+          allowedDomains: ["github.com"],
+          serviceDomains: { "api.github.com": "GITHUB_TOKEN" },
+        },
+        raw: { cpus: 4, memory: 4096 },
+      })
+    ).not.toThrow();
   });
 
-  it("rejects an unknown top-level field", () => {
-    expect(validate({ name: "n", image: "i", bogus: 1 })).toBe(false);
+  it("rejects toolchain entry with multiple keys", () => {
+    expect(() =>
+      validateRepoConfig({ toolchain: [{ node: "22", bun: "1" }] })
+    ).toThrow();
   });
 
-  it("accepts secrets.allowed entries with hosts and requireTls", () => {
-    expect(validate({
-      name: "n",
-      image: "i",
-      secrets: { allowed: [{ name: "X", hosts: ["a"], requireTls: true }] },
-    })).toBe(true);
-  });
-});
-
-describe("repoConfigSchema", () => {
-  const validate = ajv.compile(repoConfigSchema);
-
-  it("accepts a minimal valid config", () => {
-    expect(validate({ agent: "claude", profile: "nodejs" })).toBe(true);
+  it("rejects non-string toolchain version", () => {
+    expect(() =>
+      validateRepoConfig({ toolchain: [{ node: 22 }] })
+    ).toThrow();
   });
 
-  it("rejects without agent", () => {
-    expect(validate({ profile: "nodejs" })).toBe(false);
+  it("rejects non-string secret name", () => {
+    expect(() =>
+      validateRepoConfig({ secrets: [123] })
+    ).toThrow();
   });
 
-  it("allows raw passthrough as an object", () => {
-    expect(validate({ agent: "claude", profile: "nodejs", raw: { cpus: 4 } })).toBe(true);
+  it("rejects unknown top-level field", () => {
+    expect(() =>
+      validateRepoConfig({ agent: "claude" })
+    ).toThrow();
   });
 
-  it("rejects raw as a non-object", () => {
-    expect(validate({ agent: "claude", profile: "nodejs", raw: "x" })).toBe(false);
+  it("rejects mount without target", () => {
+    expect(() =>
+      validateRepoConfig({ mounts: [{ type: "bind", source: "./foo" }] })
+    ).toThrow();
+  });
+
+  it("accepts config with only toolchain", () => {
+    expect(() => validateRepoConfig({ toolchain: [{ python: "3.12" }] })).not.toThrow();
+  });
+
+  it("accepts config with only secrets", () => {
+    expect(() => validateRepoConfig({ secrets: ["MY_TOKEN"] })).not.toThrow();
+  });
+
+  it("accepts network with only serviceDomains", () => {
+    expect(() =>
+      validateRepoConfig({
+        network: { serviceDomains: { "api.example.com": "TOKEN" } },
+      })
+    ).not.toThrow();
+  });
+
+  it("accepts network with empty allowedDomains", () => {
+    expect(() =>
+      validateRepoConfig({ network: { allowedDomains: [] } })
+    ).not.toThrow();
   });
 });
