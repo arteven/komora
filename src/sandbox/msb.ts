@@ -47,4 +47,8 @@ export const msb = {
     if (!found) return "missing";
     return found.status;
   },
+  async execInSandbox(sandbox: string, scriptPath: string, args: string[]): Promise<void> {
+    const { execa } = await import("execa");
+    await execa("msb", ["exec", sandbox, "bash", scriptPath, ...args], { stdio: "inherit" });
+  },
 };
