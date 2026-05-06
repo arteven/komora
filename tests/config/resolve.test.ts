@@ -1,141 +1,194 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { resolveConfig } from "../../src/config/resolve.js";
-import type { Profile, RepoConfig } from "../../src/config/types.js";
+import type { AgentDefinition, RepoConfig } from "../../src/config/types.js";
 
-const baseProfile: Profile = {
-  name: "nodejs",
-  image: "img:t",
-  env: { A: "1", B: "2" },
-  mounts: [{ type: "bind", source: "${WORKSPACE}", target: "/workspace" }],
-  secrets: { allowed: [{ name: "GITHUB_TOKEN" }] },
+const claude: AgentDefinition = {
+  template: "docker/sandbox-templates:claude-code-docker",
+  command: "claude",
+  authVolumes: [{ type: "volume", name: "claude-auth", target: "/home/agent/.claude" }],
+  defaultSecrets: ["ANTHROPIC_API_KEY"],
+  defaultDomains: ["api.anthropic.com", "auth.anthropic.com"],
 };
 
-describe("resolveConfig", () => {
-  it("merges env with repo overriding profile", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs", env: { B: "x", C: "3" } },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+const emptyRepo: RepoConfig = {};
+
+describe("resolveConfig v2", () => {
+  it("resolves with agent defaults only (no repo config)", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(r.profile.env).toEqual({ A: "1", B: "x", C: "3" });
+    expect(resolved.image).toBe("docker/sandbox-templates:claude-code-docker");
+    expect(resolved.command).toBe("claude");
+    expect(resolved.mounts).toEqual([
+      { type: "bind", source: "/home/user/project", target: "/workspace" },
+      { type: "volume", name: "claude-auth", target: "/home/agent/.claude" },
+    ]);
+    expect(resolved.secrets).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(resolved.domains).toEqual(["api.anthropic.com", "auth.anthropic.com"]);
+    expect(resolved.sandboxName).toBe("project-claude");
+    expect(resolved.bare).toBe(false);
   });
 
-  it("appends repo mounts to profile mounts", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: {
-        agent: "claude",
-        profile: "nodejs",
-        mounts: [{ type: "volume", name: "extra", target: "/extra" }],
+  it("merges repo config on top of agent defaults", () => {
+    const repo: RepoConfig = {
+      env: { NODE_ENV: "dev" },
+      secrets: ["GITHUB_TOKEN"],
+      network: {
+        allowedDomains: ["github.com"],
+        serviceDomains: { "api.github.com": "GITHUB_TOKEN" },
       },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+      mounts: [{ type: "bind", source: "./data", target: "/workspace/data" }],
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(r.profile.mounts).toHaveLength(2);
-    expect(r.profile.mounts?.[1].target).toBe("/extra");
+    expect(resolved.env).toEqual({ NODE_ENV: "dev" });
+    expect(resolved.secrets).toEqual(["ANTHROPIC_API_KEY", "GITHUB_TOKEN"]);
+    expect(resolved.domains).toContain("api.anthropic.com");
+    expect(resolved.domains).toContain("github.com");
+    expect(resolved.domains).toContain("api.github.com");
+    expect(resolved.mounts).toHaveLength(3);
   });
 
-  it("substitutes ${WORKSPACE} in mount sources", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("--bare strips agent defaults", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
+      bare: true,
     });
-    expect(r.profile.mounts?.[0].source).toBe("/tmp/foo");
+    expect(resolved.bare).toBe(true);
+    expect(resolved.mounts).toEqual([
+      { type: "bind", source: "/home/user/project", target: "/workspace" },
+    ]);
+    expect(resolved.secrets).toEqual([]);
+    expect(resolved.domains).toEqual([]);
   });
 
-  it("opts in to allowed secrets via repo config", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs", secrets: { allow: ["GITHUB_TOKEN"] } },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("--bare with repo config keeps repo additions", () => {
+    const repo: RepoConfig = {
+      secrets: ["MY_TOKEN"],
+      network: { allowedDomains: ["example.com"] },
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
+      bare: true,
     });
-    expect(r.profile.secrets?.allowed?.map((s) => s.name)).toContain("GITHUB_TOKEN");
+    expect(resolved.secrets).toEqual(["MY_TOKEN"]);
+    expect(resolved.domains).toEqual(["example.com"]);
   });
 
-  it("exposes opted-in subset on ResolvedConfig.secretsAllow", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs", secrets: { allow: ["GITHUB_TOKEN"] } },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("deduplicates secrets from serviceDomains", () => {
+    const repo: RepoConfig = {
+      secrets: ["GITHUB_TOKEN"],
+      network: { serviceDomains: { "api.github.com": "GITHUB_TOKEN" } },
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(r.secretsAllow).toEqual(["GITHUB_TOKEN"]);
+    const tokenCount = resolved.secrets.filter((s) => s === "GITHUB_TOKEN").length;
+    expect(tokenCount).toBe(1);
   });
 
-  it("secretsAllow defaults to empty array when repo opts in to nothing", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("serviceDomains keys added to domains", () => {
+    const repo: RepoConfig = {
+      network: { serviceDomains: { "api.github.com": "GITHUB_TOKEN" } },
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(r.secretsAllow).toEqual([]);
+    expect(resolved.domains).toContain("api.github.com");
   });
 
-  it("rejects opting in to a secret the profile did not declare", () => {
-    expect(() => resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs", secrets: { allow: ["MYSTERY"] } },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
-    })).toThrow(/MYSTERY.*not declared/i);
-  });
-
-  it("warns and ignores profile.digest", () => {
-    const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    resolveConfig({
-      profile: { ...baseProfile, digest: "sha256:abc" },
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("resolves ${WORKSPACE} in mount sources", () => {
+    const repo: RepoConfig = {
+      mounts: [{ type: "bind", source: "${WORKSPACE}/data", target: "/data" }],
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/digest.*ignored/i));
-    warn.mockRestore();
+    const dataMnt = resolved.mounts.find((m) => m.target === "/data");
+    expect(dataMnt!.source).toBe("/home/user/project/data");
   });
 
-  it("warns and ignores a non-empty network block (v2-reserved)", () => {
-    const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    resolveConfig({
-      profile: { ...baseProfile, network: { allowedDomains: ["github.com"] } },
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("resolves relative mount sources against workspaceDir", () => {
+    const repo: RepoConfig = {
+      mounts: [{ type: "bind", source: "./data", target: "/data" }],
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/network.*ignored/i));
-    warn.mockRestore();
+    const dataMnt = resolved.mounts.find((m) => m.target === "/data");
+    expect(dataMnt!.source).toBe("/home/user/project/data");
   });
 
-  it("errors when raw conflicts with a komora-modeled field", () => {
-    expect(() => resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs", raw: { env: { X: "y" } } },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
-    })).toThrow(/raw.*env.*conflict/i);
-  });
-
-  it("computes deterministic sandbox name", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
-    });
-    expect(r.sandboxName).toBe("foo-claude-nodejs");
-  });
-
-  it("uses --name override for sandbox name", () => {
-    const r = resolveConfig({
-      profile: baseProfile,
-      repoConfig: { agent: "claude", profile: "nodejs" },
-      workspaceDir: "/tmp/foo",
-      workspaceSlug: "foo",
+  it("uses name override for sandbox name", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
       nameOverride: "custom",
     });
-    expect(r.sandboxName).toBe("custom");
+    expect(resolved.sandboxName).toBe("custom");
+  });
+
+  it("errors on raw key conflicting with modeled field", () => {
+    expect(() =>
+      resolveConfig({
+        agent: "claude",
+        agentDef: claude,
+        repoConfig: { raw: { env: { X: "Y" } } },
+        workspaceDir: "/tmp",
+        workspaceSlug: "tmp",
+      })
+    ).toThrow(/raw\.env.*conflicts/);
+  });
+
+  it("passes toolchain and setup through", () => {
+    const repo: RepoConfig = {
+      toolchain: [{ node: "22" }],
+      setup: ["npm ci"],
+    };
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: repo,
+      workspaceDir: "/tmp",
+      workspaceSlug: "tmp",
+    });
+    expect(resolved.toolchain).toEqual([{ node: "22" }]);
+    expect(resolved.setup).toEqual(["npm ci"]);
   });
 });

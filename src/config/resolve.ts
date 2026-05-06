@@ -1,56 +1,29 @@
-import type { Profile, RepoConfig, ResolvedConfig } from "./types.js";
+import path from "node:path";
+import type { AgentDefinition, RepoConfig, ResolvedConfig } from "./types.js";
 import { sandboxName } from "../sandbox/naming.js";
-import { log } from "../util/log.js";
 
-const RAW_CONFLICT_KEYS = new Set(["env", "mounts", "secrets", "image", "name", "startup"]);
+const RAW_CONFLICT_KEYS = new Set(["env", "mounts", "secrets", "image", "name"]);
 
 export interface ResolveInput {
-  profile: Profile;
+  agent: string;
+  agentDef: AgentDefinition;
   repoConfig: RepoConfig;
   workspaceDir: string;
   workspaceSlug: string;
   nameOverride?: string;
+  bare?: boolean;
 }
 
-function substituteWorkspace(s: string, workspaceDir: string): string {
-  return s.replace(/\$\{WORKSPACE\}/g, workspaceDir);
+function resolveSource(source: string, workspaceDir: string): string {
+  const substituted = source.replace(/\$\{WORKSPACE\}/g, workspaceDir);
+  if (substituted.startsWith("./") || substituted.startsWith("../")) {
+    return path.resolve(workspaceDir, substituted);
+  }
+  return substituted;
 }
 
 export function resolveConfig(input: ResolveInput): ResolvedConfig {
-  const { profile, repoConfig, workspaceDir, workspaceSlug, nameOverride } = input;
-
-  if (profile.digest) {
-    log.warn(`profile '${profile.name}': 'digest' field is reserved for V2 and is ignored`);
-  }
-
-  const profileNetNonEmpty =
-    !!profile.network && (
-      (profile.network.allowedDomains?.length ?? 0) > 0 ||
-      Object.keys(profile.network.serviceDomains ?? {}).length > 0
-    );
-  const repoNetNonEmpty =
-    !!repoConfig.network && (
-      (repoConfig.network.allowedDomains?.length ?? 0) > 0 ||
-      Object.keys(repoConfig.network.serviceDomains ?? {}).length > 0
-    );
-  if (profileNetNonEmpty || repoNetNonEmpty) {
-    log.warn(`'network' block is reserved for V2 (kit-compat) and is ignored`);
-  }
-
-  const env = { ...(profile.env ?? {}), ...(repoConfig.env ?? {}) };
-
-  const profileMounts = (profile.mounts ?? []).map((m) =>
-    m.source ? { ...m, source: substituteWorkspace(m.source, workspaceDir) } : m,
-  );
-  const mounts = [...profileMounts, ...(repoConfig.mounts ?? [])];
-
-  const declared = new Set((profile.secrets?.allowed ?? []).map((s) => s.name));
-  for (const name of repoConfig.secrets?.allow ?? []) {
-    if (!declared.has(name)) {
-      throw new Error(`repo config secrets.allow: '${name}' is not declared in profile '${profile.name}'`);
-    }
-  }
-  const secretsAllow = [...(repoConfig.secrets?.allow ?? [])];
+  const { agent, agentDef, repoConfig, workspaceDir, workspaceSlug, nameOverride, bare } = input;
 
   const raw = repoConfig.raw ?? {};
   for (const key of Object.keys(raw)) {
@@ -59,14 +32,38 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     }
   }
 
-  const merged: Profile = { ...profile, env, mounts };
+  const workspaceBind = { type: "bind" as const, source: workspaceDir, target: "/workspace" };
+  const agentAuthVolumes = bare ? [] : agentDef.authVolumes;
+  const repoMounts = (repoConfig.mounts ?? []).map((m) =>
+    m.source ? { ...m, source: resolveSource(m.source, workspaceDir) } : m,
+  );
+  const mounts = [workspaceBind, ...agentAuthVolumes, ...repoMounts];
+
+  const agentSecrets = bare ? [] : agentDef.defaultSecrets;
+  const repoSecrets = repoConfig.secrets ?? [];
+  const serviceSecrets = Object.values(repoConfig.network?.serviceDomains ?? {});
+  const allSecrets = [...new Set([...agentSecrets, ...repoSecrets, ...serviceSecrets])];
+
+  const agentDomains = bare ? [] : agentDef.defaultDomains;
+  const repoDomains = repoConfig.network?.allowedDomains ?? [];
+  const serviceDomainKeys = Object.keys(repoConfig.network?.serviceDomains ?? {});
+  const allDomains = [...new Set([...agentDomains, ...repoDomains, ...serviceDomainKeys])];
+
   return {
-    agent: repoConfig.agent,
-    profile: merged,
+    agent,
+    agentDef,
+    image: agentDef.template,
+    command: agentDef.command,
+    env: repoConfig.env ?? {},
+    mounts,
+    secrets: allSecrets,
+    domains: allDomains,
+    toolchain: repoConfig.toolchain ?? [],
+    setup: repoConfig.setup ?? [],
     raw,
-    secretsAllow,
+    bare: !!bare,
     workspaceDir,
     workspaceSlug,
-    sandboxName: sandboxName({ workspaceSlug, agent: repoConfig.agent, profile: profile.name, override: nameOverride }),
+    sandboxName: sandboxName({ workspaceSlug, agent, override: nameOverride }),
   };
 }
