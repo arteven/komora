@@ -4,8 +4,10 @@ import { getAgent, BUILTIN_AGENTS } from "../../src/agents/registry.js";
 vi.mock("node:fs/promises");
 
 describe("agent registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
   });
 
   it("returns claude built-in agent", async () => {
