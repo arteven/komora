@@ -40,7 +40,12 @@ export async function runQuietly(
 }
 
 async function runInitSequence(sandbox: Sandbox, cfg: ResolvedConfig, verbose: boolean): Promise<void> {
-  await runQuietly(sandbox, "sed -i '/^nameserver fd42:/d' /etc/resolv.conf", verbose);
+  // Strip microsandbox's IPv6 nameserver — best-effort since /etc/resolv.conf may be read-only
+  try {
+    await runQuietly(sandbox, "cp /etc/resolv.conf /tmp/resolv.conf && sed -i '/^nameserver fd42:/d' /tmp/resolv.conf && cp /tmp/resolv.conf /etc/resolv.conf && rm /tmp/resolv.conf", verbose);
+  } catch {
+    if (verbose) log.warn("could not patch /etc/resolv.conf (read-only), continuing");
+  }
 
   if (cfg.toolchain.length > 0) {
     log.info(`installing toolchains: ${cfg.toolchain.map((t) => Object.keys(t)[0]).join(", ")}`);
