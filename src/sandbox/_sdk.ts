@@ -1,4 +1,4 @@
-import { Sandbox } from "microsandbox";
+import { Sandbox, Volume, VolumeAlreadyExistsError } from "microsandbox";
 import type { SandboxStatus as SdkSandboxStatus } from "microsandbox";
 import type { Mount } from "../config/types.js";
 import { log } from "../util/log.js";
@@ -152,6 +152,11 @@ export const sdk = {
           );
         }
         const named = m.name;
+        try {
+          await Volume.builder(named).create();
+        } catch (e) {
+          if (!(e instanceof VolumeAlreadyExistsError)) throw e;
+        }
         builder = builder.volume(m.target, (b) => b.named(named));
       }
     }

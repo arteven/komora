@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
 
@@ -95,11 +95,21 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic } =
       }),
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic };
+    const volumeBuilderSpy = {
+      create: vi.fn(async () => ({})),
+    };
+
+    const volumeStatic = {
+      builder: vi.fn((_name: string) => volumeBuilderSpy),
+    };
+
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy };
   });
 
 vi.mock("microsandbox", () => ({
   Sandbox: sandboxStatic,
+  Volume: volumeStatic,
+  VolumeAlreadyExistsError: class VolumeAlreadyExistsError extends Error {},
 }));
 
 import { sdk } from "../../src/sandbox/_sdk.js";
@@ -122,6 +132,8 @@ beforeEach(() => {
     sandboxStatic.start,
     sandboxStatic.list,
     sandboxStatic.remove,
+    volumeStatic.builder,
+    volumeBuilderSpy.create,
   ].forEach((m) => m.mockClear());
   // Restore default list resolution.
   sandboxStatic.list.mockResolvedValue([] as never);
@@ -168,6 +180,7 @@ describe("sdk.create", () => {
       'secret.allowHost(["example.com"])',
       'create([])',
     ]);
+    expect(volumeStatic.builder).toHaveBeenCalledWith("v2");
   });
 
   it("does not call allowHost for hostless secrets", async () => {
