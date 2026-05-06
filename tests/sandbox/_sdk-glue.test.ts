@@ -166,6 +166,7 @@ describe("sdk.create", () => {
         "--secret",
         "BAZ=qux@example.com",
       ],
+      domains: [],
       raw: {},
     });
 
@@ -201,6 +202,7 @@ describe("sdk.create", () => {
       mounts: [],
       env: {},
       secretArgs: ["--secret", "X=y"],
+      domains: [],
       raw: {},
     });
     expect(secretBuilder.allowHost).not.toHaveBeenCalled();
@@ -214,6 +216,7 @@ describe("sdk.create", () => {
         mounts: [{ type: "bind", target: "/c" }],
         env: {},
         secretArgs: [],
+        domains: [],
         raw: {},
       }),
     ).rejects.toThrow(/bind mount missing source/);
@@ -227,6 +230,7 @@ describe("sdk.create", () => {
         mounts: [{ type: "volume", target: "/c" }],
         env: {},
         secretArgs: [],
+        domains: [],
         raw: {},
       }),
     ).rejects.toThrow(/volume mount missing name/);

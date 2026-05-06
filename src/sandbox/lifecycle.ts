@@ -69,6 +69,7 @@ export async function ensureSandbox(
         mounts: cfg.mounts,
         env: cfg.env,
         secretArgs,
+        domains: cfg.domains,
         raw: cfg.raw,
       });
       const sandbox = await msb.start(cfg.sandboxName);

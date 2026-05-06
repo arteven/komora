@@ -10,6 +10,7 @@ export interface CreateInput {
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
+  domains: string[];
   raw: Record<string, unknown>;
 }
 

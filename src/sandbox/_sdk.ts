@@ -9,6 +9,7 @@ export interface SdkCreateInput {
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
+  domains: string[];
   raw: Record<string, unknown>;
 }
 
@@ -168,6 +169,15 @@ export const sdk = {
         if (s.host) sb = sb.allowHost(s.host);
         return sb;
       });
+    }
+
+    if (input.secretArgs.length > 0 && input.domains.length > 0) {
+      builder = builder.network((n: any) =>
+        n.tls((t: any) => {
+          for (const d of input.domains) t = t.bypass(d);
+          return t;
+        }),
+      );
     }
 
     return builder.create();
