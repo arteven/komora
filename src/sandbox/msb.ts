@@ -24,7 +24,7 @@ export interface ExecCommand {
 
 export const msb = {
   execCommand(sandbox: string, cmd: string, args: string[]): ExecCommand {
-    return { command: "msb", args: ["exec", sandbox, cmd, ...args] };
+    return { command: "msb", args: ["exec", "--tty", sandbox, "--", cmd, ...args] };
   },
   async create(input: CreateInput): Promise<{ id: string }> {
     return sdk.create(input);
@@ -49,6 +49,6 @@ export const msb = {
   },
   async execInSandbox(sandbox: string, scriptPath: string, args: string[]): Promise<void> {
     const { execa } = await import("execa");
-    await execa("msb", ["exec", sandbox, "bash", scriptPath, ...args], { stdio: "inherit" });
+    await execa("msb", ["exec", sandbox, "--", "bash", scriptPath, ...args], { stdio: "inherit" });
   },
 };
