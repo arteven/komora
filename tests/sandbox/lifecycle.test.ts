@@ -8,6 +8,7 @@ const mockSandbox = vi.hoisted(() => ({
   attach: vi.fn(),
   stop: vi.fn(),
   stopAndWait: vi.fn().mockResolvedValue({}),
+  removePersisted: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../src/sandbox/msb.js", () => ({
@@ -190,7 +191,7 @@ describe("removeSandbox", () => {
     await removeSandbox("test");
     expect(msb.connect).toHaveBeenCalledWith("test");
     expect(mockSandbox.stopAndWait).toHaveBeenCalled();
-    expect(msb.rm).toHaveBeenCalledWith("test");
+    expect(mockSandbox.removePersisted).toHaveBeenCalled();
   });
 
   it("no-ops for missing sandbox", async () => {

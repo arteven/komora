@@ -93,6 +93,8 @@ export async function removeSandbox(name: string): Promise<void> {
   if (status === "running") {
     const sandbox = await msb.connect(name);
     await sandbox.stopAndWait();
+    await sandbox.removePersisted();
+  } else {
+    await msb.rm(name);
   }
-  await msb.rm(name);
 }
