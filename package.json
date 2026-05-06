@@ -7,7 +7,7 @@
     "komora": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p . && node -e \"require('node:fs').cpSync('src/profiles/builtin','dist/profiles/builtin',{recursive:true})\"",
+    "build": "tsc -p . && node -e \"require('node:fs').cpSync('src/toolchains','dist/toolchains',{recursive:true,filter:(s)=>s.endsWith('.sh')||require('node:fs').statSync(s).isDirectory()})\"",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -37,7 +37,7 @@
   },
   "files": [
     "dist/",
-    "src/profiles/builtin/",
+    "src/toolchains/",
     "schema/"
   ]
 }
