@@ -63,7 +63,7 @@ export async function ensureSandbox(
     if (status === "missing") {
       const values = await collectSecretValues(cfg.secrets);
       const secretArgs = buildSecretArgs(values);
-      await msb.create({
+      const sandbox = await msb.create({
         name: cfg.sandboxName,
         image: cfg.image,
         mounts: cfg.mounts,
@@ -72,7 +72,6 @@ export async function ensureSandbox(
         domains: cfg.domains,
         raw: cfg.raw,
       });
-      const sandbox = await msb.start(cfg.sandboxName);
       await runInitSequence(sandbox, cfg, verbose);
       return sandbox;
     } else if (status === "stopped") {
