@@ -5,6 +5,7 @@ export interface CreateOpts {
   agent?: string;
   name?: string;
   bare?: boolean;
+  verbose?: boolean;
   workspaceDir: string;
 }
 
@@ -15,5 +16,5 @@ export async function create(opts: CreateOpts): Promise<void> {
     nameOverride: opts.name,
     bare: opts.bare,
   });
-  await ensureSandbox(cfg);
+  await ensureSandbox(cfg, { verbose: opts.verbose });
 }

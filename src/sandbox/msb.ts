@@ -1,3 +1,4 @@
+import type { Sandbox } from "microsandbox";
 import { sdk } from "./_sdk.js";
 import type { Mount } from "../config/types.js";
 
@@ -17,19 +18,11 @@ export interface ListItem {
   status: "running" | "stopped";
 }
 
-export interface ExecCommand {
-  command: string;
-  args: string[];
-}
-
 export const msb = {
-  execCommand(sandbox: string, cmd: string, args: string[]): ExecCommand {
-    return { command: "msb", args: ["exec", "--tty", sandbox, "--", cmd, ...args] };
-  },
-  async create(input: CreateInput): Promise<{ id: string }> {
+  async create(input: CreateInput): Promise<Sandbox> {
     return sdk.create(input);
   },
-  async start(name: string): Promise<void> {
+  async start(name: string): Promise<Sandbox> {
     return sdk.start(name);
   },
   async stop(name: string): Promise<void> {
@@ -46,9 +39,5 @@ export const msb = {
     const found = items.find((i) => i.name === name);
     if (!found) return "missing";
     return found.status;
-  },
-  async execInSandbox(sandbox: string, scriptPath: string, args: string[]): Promise<void> {
-    const { execa } = await import("execa");
-    await execa("msb", ["exec", sandbox, "--", "bash", scriptPath, ...args], { stdio: "inherit" });
   },
 };

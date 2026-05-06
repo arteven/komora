@@ -8,6 +8,7 @@ export interface RunOpts {
   name?: string;
   bare?: boolean;
   dryRun?: boolean;
+  verbose?: boolean;
   argv: string[];
   workspaceDir: string;
 }
@@ -26,6 +27,6 @@ export async function run(opts: RunOpts): Promise<number> {
     return 0;
   }
 
-  await ensureSandbox(cfg);
-  return runAgent({ name: cfg.sandboxName, agent: cfg.agent, argv: opts.argv });
+  const sandbox = await ensureSandbox(cfg, { verbose: opts.verbose });
+  return runAgent({ sandbox, agent: cfg.agent, argv: opts.argv });
 }

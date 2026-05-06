@@ -2,19 +2,25 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ensureSandbox, stopSandbox, removeSandbox } from "../../src/sandbox/lifecycle.js";
 import type { ResolvedConfig, AgentDefinition } from "../../src/config/types.js";
 
+const mockSandbox = vi.hoisted(() => ({
+  exec: vi.fn(),
+  shell: vi.fn().mockResolvedValue({ success: true, code: 0, stdout: () => "", stderr: () => "" }),
+  attach: vi.fn(),
+  stop: vi.fn(),
+}));
+
 vi.mock("../../src/sandbox/msb.js", () => ({
   msb: {
     status: vi.fn(),
-    create: vi.fn().mockResolvedValue({ id: "test" }),
-    start: vi.fn().mockResolvedValue(undefined),
+    create: vi.fn().mockResolvedValue(mockSandbox),
+    start: vi.fn().mockResolvedValue(mockSandbox),
     stop: vi.fn().mockResolvedValue(undefined),
     rm: vi.fn().mockResolvedValue(undefined),
-    execInSandbox: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 vi.mock("../../src/sandbox/lock.js", () => ({
-  withSandboxLock: vi.fn((_name: string, fn: () => Promise<void>) => fn()),
+  withSandboxLock: vi.fn((_name: string, fn: () => Promise<unknown>) => fn()),
 }));
 
 vi.mock("../../src/secrets/store.js", () => ({
@@ -57,24 +63,29 @@ function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
 describe("ensureSandbox v2", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSandbox.shell.mockResolvedValue({ success: true, code: 0, stdout: () => "", stderr: () => "" });
   });
 
   it("creates + starts sandbox when missing", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
-    await ensureSandbox(makeCfg());
+    const sandbox = await ensureSandbox(makeCfg());
 
     expect(msb.create).toHaveBeenCalledOnce();
     expect(msb.start).toHaveBeenCalledOnce();
     const createArg = vi.mocked(msb.create).mock.calls[0][0];
     expect(createArg.name).toBe("test-claude");
     expect(createArg.image).toBe("docker/sandbox-templates:claude-code-docker");
+    expect(sandbox).toBe(mockSandbox);
   });
 
   it("only starts sandbox when stopped", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("stopped");
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg());
 
@@ -82,19 +93,23 @@ describe("ensureSandbox v2", () => {
     expect(msb.start).toHaveBeenCalledOnce();
   });
 
-  it("no-ops when running", async () => {
+  it("starts sandbox to get handle when already running", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("running");
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
-    await ensureSandbox(makeCfg());
+    const sandbox = await ensureSandbox(makeCfg());
 
     expect(msb.create).not.toHaveBeenCalled();
-    expect(msb.start).not.toHaveBeenCalled();
+    expect(msb.start).toHaveBeenCalledOnce();
+    expect(sandbox).toBe(mockSandbox);
   });
 
   it("collects secret values and passes to create", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg());
 
@@ -106,33 +121,49 @@ describe("ensureSandbox v2", () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     const { runToolchains } = await import("../../src/toolchains/runner.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }));
 
-    expect(runToolchains).toHaveBeenCalledWith("test-claude", [{ node: "22" }]);
+    expect(runToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], false);
   });
 
   it("runs setup commands after toolchains", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg({ setup: ["npm ci"] }));
 
-    const execCalls = vi.mocked(msb.execInSandbox).mock.calls;
-    const setupCall = execCalls.find((c) => c[1] === "bash" && c[2]?.includes("-c"));
-    expect(setupCall).toBeDefined();
+    expect(mockSandbox.shell).toHaveBeenCalledWith("npm ci");
   });
 
   it("skips secret if not in store", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
     const store = await import("../../src/secrets/store.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
     vi.mocked(store.getSecret).mockResolvedValue(undefined);
 
     await ensureSandbox(makeCfg());
 
     const createArg = vi.mocked(msb.create).mock.calls[0][0];
     expect(createArg.secretArgs).toEqual([]);
+  });
+
+  it("passes verbose flag to init sequence", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    const { runToolchains } = await import("../../src/toolchains/runner.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(msb.start).mockResolvedValue(mockSandbox);
+
+    await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }), { verbose: true });
+
+    expect(runToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], true);
   });
 });
 

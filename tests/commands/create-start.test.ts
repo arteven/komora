@@ -10,7 +10,7 @@ vi.mock("../../src/config/index.js", () => ({
 }));
 
 vi.mock("../../src/sandbox/lifecycle.js", () => ({
-  ensureSandbox: vi.fn().mockResolvedValue(undefined),
+  ensureSandbox: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../../src/sandbox/msb.js", () => ({

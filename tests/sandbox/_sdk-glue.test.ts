@@ -8,9 +8,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy, mockSandbox } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
+
+    const mockSandbox = {
+      exec: vi.fn(),
+      shell: vi.fn(),
+      attach: vi.fn(),
+      stop: vi.fn(),
+    };
 
     // Mount sub-builder passed into `volume(target, fn)`.
     const mountBuilder = {
@@ -72,7 +79,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
       ),
       create: vi.fn(async () => {
         calls.push({ method: "create", args: [] });
-        return {};
+        return mockSandbox;
       }),
     };
 
@@ -83,7 +90,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
       }),
       start: vi.fn(async (name: string) => {
         calls.push({ method: "Sandbox.start", args: [name] });
-        return {};
+        return mockSandbox;
       }),
       list: vi.fn(async () => [] as Array<{
         name: string;
@@ -103,7 +110,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
       builder: vi.fn((_name: string) => volumeBuilderSpy),
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy };
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy, mockSandbox };
   });
 
 vi.mock("microsandbox", () => ({
@@ -134,6 +141,10 @@ beforeEach(() => {
     sandboxStatic.remove,
     volumeStatic.builder,
     volumeBuilderSpy.create,
+    mockSandbox.exec,
+    mockSandbox.shell,
+    mockSandbox.attach,
+    mockSandbox.stop,
   ].forEach((m) => m.mockClear());
   // Restore default list resolution.
   sandboxStatic.list.mockResolvedValue([] as never);
@@ -158,7 +169,7 @@ describe("sdk.create", () => {
       raw: {},
     });
 
-    expect(got).toEqual({ id: "name" });
+    expect(got).toBe(mockSandbox);
 
     // Filter to just the high-level builder ops for a stable assertion.
     const seq = calls.map((c) => `${c.method}(${JSON.stringify(c.args)})`);
@@ -223,9 +234,10 @@ describe("sdk.create", () => {
 });
 
 describe("sdk.start", () => {
-  it("forwards to Sandbox.start", async () => {
-    await sdk.start("x");
+  it("forwards to Sandbox.start and returns the Sandbox", async () => {
+    const result = await sdk.start("x");
     expect(sandboxStatic.start).toHaveBeenCalledWith("x");
+    expect(result).toBe(mockSandbox);
   });
 });
 

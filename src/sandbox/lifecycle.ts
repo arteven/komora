@@ -1,3 +1,4 @@
+import type { Sandbox } from "microsandbox";
 import { msb } from "./msb.js";
 import { withSandboxLock } from "./lock.js";
 import { getSecret } from "../secrets/store.js";
@@ -15,25 +16,49 @@ async function collectSecretValues(secretNames: string[]): Promise<Record<string
   return out;
 }
 
-async function runInitSequence(cfg: ResolvedConfig): Promise<void> {
-  await msb.execInSandbox(cfg.sandboxName, "bash", [
-    "-c",
-    "sed -i '/^nameserver fd42:/d' /etc/resolv.conf",
-  ]);
+export async function runQuietly(
+  sandbox: Sandbox,
+  script: string,
+  verbose: boolean,
+): Promise<void> {
+  const result = await sandbox.shell(script);
+  if (verbose) {
+    const out = result.stdout();
+    const err = result.stderr();
+    if (out) process.stdout.write(out);
+    if (err) process.stderr.write(err);
+  }
+  if (!result.success) {
+    const out = result.stdout();
+    const err = result.stderr();
+    if (!verbose) {
+      if (out) process.stdout.write(out);
+      if (err) process.stderr.write(err);
+    }
+    throw new Error(`command failed (exit ${result.code}): ${script}`);
+  }
+}
+
+async function runInitSequence(sandbox: Sandbox, cfg: ResolvedConfig, verbose: boolean): Promise<void> {
+  await runQuietly(sandbox, "sed -i '/^nameserver fd42:/d' /etc/resolv.conf", verbose);
 
   if (cfg.toolchain.length > 0) {
     log.info(`installing toolchains: ${cfg.toolchain.map((t) => Object.keys(t)[0]).join(", ")}`);
-    await runToolchains(cfg.sandboxName, cfg.toolchain);
+    await runToolchains(sandbox, cfg.toolchain, verbose);
   }
 
   for (const cmd of cfg.setup) {
     log.info(`setup: ${cmd}`);
-    await msb.execInSandbox(cfg.sandboxName, "bash", ["-c", cmd]);
+    await runQuietly(sandbox, cmd, verbose);
   }
 }
 
-export async function ensureSandbox(cfg: ResolvedConfig): Promise<void> {
-  await withSandboxLock(cfg.sandboxName, async () => {
+export async function ensureSandbox(
+  cfg: ResolvedConfig,
+  opts?: { verbose?: boolean },
+): Promise<Sandbox> {
+  const verbose = opts?.verbose ?? false;
+  return withSandboxLock(cfg.sandboxName, async () => {
     const status = await msb.status(cfg.sandboxName);
     if (status === "missing") {
       const values = await collectSecretValues(cfg.secrets);
@@ -46,10 +71,13 @@ export async function ensureSandbox(cfg: ResolvedConfig): Promise<void> {
         secretArgs,
         raw: cfg.raw,
       });
-      await msb.start(cfg.sandboxName);
-      await runInitSequence(cfg);
+      const sandbox = await msb.start(cfg.sandboxName);
+      await runInitSequence(sandbox, cfg, verbose);
+      return sandbox;
     } else if (status === "stopped") {
-      await msb.start(cfg.sandboxName);
+      return msb.start(cfg.sandboxName);
+    } else {
+      return msb.start(cfg.sandboxName);
     }
   });
 }

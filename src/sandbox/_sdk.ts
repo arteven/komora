@@ -127,7 +127,7 @@ export function buildSecretArgs(values: Record<string, string>): string[] {
 }
 
 export const sdk = {
-  async create(input: SdkCreateInput): Promise<{ id: string }> {
+  async create(input: SdkCreateInput): Promise<Sandbox> {
     warnUnmappedRaw(input.raw);
 
     let builder = Sandbox.builder(input.name).image(input.image);
@@ -170,15 +170,11 @@ export const sdk = {
       });
     }
 
-    await builder.create();
-    // The SDK does not surface an opaque ID; use the sandbox name as the id.
-    return { id: input.name };
+    return builder.create();
   },
 
-  async start(name: string): Promise<void> {
-    // TODO(phase-6): consider Sandbox.startDetached(name) for daemon-style
-    // lifecycle; current attached handle is dropped.
-    await Sandbox.start(name);
+  async start(name: string): Promise<Sandbox> {
+    return Sandbox.start(name);
   },
 
   /**

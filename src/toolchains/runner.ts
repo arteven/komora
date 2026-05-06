@@ -1,6 +1,8 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { msb } from "../sandbox/msb.js";
+import type { Sandbox } from "microsandbox";
+import { log } from "../util/log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,12 +16,30 @@ export function getToolchainScriptPath(name: string): string {
 }
 
 export async function runToolchains(
-  sandbox: string,
+  sandbox: Sandbox,
   toolchain: Record<string, string>[],
+  verbose: boolean,
 ): Promise<void> {
   for (const entry of toolchain) {
     const [name, version] = Object.entries(entry)[0];
     const scriptPath = getToolchainScriptPath(name);
-    await msb.execInSandbox(sandbox, scriptPath, [version]);
+    const script = await fs.readFile(scriptPath, "utf-8");
+    log.info(`toolchain: installing ${name}@${version}`);
+    const result = await sandbox.shell(`set -- '${version}'\n${script}`);
+    if (verbose) {
+      const out = result.stdout();
+      const err = result.stderr();
+      if (out) process.stdout.write(out);
+      if (err) process.stderr.write(err);
+    }
+    if (!result.success) {
+      const out = result.stdout();
+      const err = result.stderr();
+      if (!verbose) {
+        if (out) process.stdout.write(out);
+        if (err) process.stderr.write(err);
+      }
+      throw new Error(`toolchain '${name}' install failed (exit ${result.code})`);
+    }
   }
 }

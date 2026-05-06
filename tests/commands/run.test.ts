@@ -21,8 +21,9 @@ vi.mock("../../src/config/index.js", () => ({
   }),
 }));
 
+const mockSandbox = vi.hoisted(() => ({ attach: vi.fn(), exec: vi.fn(), shell: vi.fn(), stop: vi.fn() }));
 vi.mock("../../src/sandbox/lifecycle.js", () => ({
-  ensureSandbox: vi.fn().mockResolvedValue(undefined),
+  ensureSandbox: vi.fn().mockResolvedValue(mockSandbox),
 }));
 
 vi.mock("../../src/sandbox/agent.js", () => ({
