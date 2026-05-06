@@ -202,11 +202,9 @@ export const sdk = {
    * benign concurrent removal and resolve.
    */
   async stop(name: string): Promise<void> {
-    const handles = await Sandbox.list();
-    const found = handles.find((h) => h.name === name);
-    if (!found) return;
     try {
-      await found.stop();
+      const handle = await Sandbox.get(name);
+      await handle.stop();
     } catch (e) {
       if (isNotFoundError(e)) return;
       throw e;

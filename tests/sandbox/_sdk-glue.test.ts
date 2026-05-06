@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy, mockSandbox } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
 
@@ -83,6 +83,11 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
       }),
     };
 
+    const liveHandle = {
+      stop: vi.fn(async () => {}),
+      connect: vi.fn(async () => mockSandbox),
+    };
+
     const sandboxStatic = {
       builder: vi.fn((name: string) => {
         calls.push({ method: "builder", args: [name] });
@@ -92,10 +97,10 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
         calls.push({ method: "Sandbox.start", args: [name] });
         return mockSandbox;
       }),
+      get: vi.fn(async (_name: string) => liveHandle),
       list: vi.fn(async () => [] as Array<{
         name: string;
         status: string;
-        stop: () => Promise<void>;
       }>),
       remove: vi.fn(async (name: string) => {
         calls.push({ method: "Sandbox.remove", args: [name] });
@@ -110,7 +115,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeSta
       builder: vi.fn((_name: string) => volumeBuilderSpy),
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, volumeStatic, volumeBuilderSpy, mockSandbox };
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox };
   });
 
 vi.mock("microsandbox", () => ({
@@ -137,8 +142,11 @@ beforeEach(() => {
     secretBuilder.allowHost,
     sandboxStatic.builder,
     sandboxStatic.start,
+    sandboxStatic.get,
     sandboxStatic.list,
     sandboxStatic.remove,
+    liveHandle.stop,
+    liveHandle.connect,
     volumeStatic.builder,
     volumeBuilderSpy.create,
     mockSandbox.exec,
@@ -270,38 +278,25 @@ describe("sdk.list", () => {
 });
 
 describe("sdk.stop", () => {
-  it("calls stop() on the matching handle", async () => {
-    const stopFn = vi.fn(async () => {});
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+  it("calls stop() on the live handle from Sandbox.get()", async () => {
     await sdk.stop("a");
-    expect(stopFn).toHaveBeenCalledTimes(1);
+    expect(sandboxStatic.get).toHaveBeenCalledWith("a");
+    expect(liveHandle.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op when the name is not in list() (does NOT throw)", async () => {
-    sandboxStatic.list.mockResolvedValue([] as never);
+  it("is a no-op when sandbox is not found", async () => {
+    sandboxStatic.get.mockRejectedValueOnce(new Error("sandbox not found: ghost"));
     await expect(sdk.stop("ghost")).resolves.toBeUndefined();
   });
 
   it("treats a 'not found'-shaped error from handle.stop() as success (race window)", async () => {
-    const stopFn = vi.fn(async () => {
-      throw new Error("sandbox not found: a");
-    });
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+    liveHandle.stop.mockRejectedValueOnce(new Error("sandbox not found: a"));
     await expect(sdk.stop("a")).resolves.toBeUndefined();
-    expect(stopFn).toHaveBeenCalled();
+    expect(liveHandle.stop).toHaveBeenCalled();
   });
 
   it("rethrows other errors from handle.stop()", async () => {
-    const stopFn = vi.fn(async () => {
-      throw new Error("kvm refused");
-    });
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+    liveHandle.stop.mockRejectedValueOnce(new Error("kvm refused"));
     await expect(sdk.stop("a")).rejects.toThrow(/kvm refused/);
   });
 });
