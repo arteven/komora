@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://komora.dev/schema/v2.json",
+  "title": "komora.config.yaml",
+  "description": "Komora V2 workspace configuration",
+  "type": "object",
+  "properties": {
+    "toolchain": {
+      "type": "array",
+      "description": "Language runtimes to install at sandbox creation",
+      "items": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "patternProperties": {
+          "^[a-z]+$": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "setup": {
+      "type": "array",
+      "description": "Shell commands run after toolchain install",
+      "items": { "type": "string" }
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables",
+      "additionalProperties": { "type": "string" }
+    },
+    "mounts": {
+      "type": "array",
+      "description": "Additional bind/volume mounts",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["bind", "volume"] },
+          "source": { "type": "string" },
+          "name": { "type": "string" },
+          "target": { "type": "string" }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Secret names to inject from the komora secret store",
+      "items": { "type": "string" }
+    },
+    "network": {
+      "type": "object",
+      "description": "Egress control",
+      "properties": {
+        "allowedDomains": {
+          "type": "array",
+          "description": "Domains the sandbox can reach",
+          "items": { "type": "string" }
+        },
+        "serviceDomains": {
+          "type": "object",
+          "description": "Maps domains to secret names (secrets injected as env vars in v2, proxy in v3)",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "raw": {
+      "type": "object",
+      "description": "Passthrough to microsandbox config"
+    }
+  },
+  "additionalProperties": false
+}
