@@ -23,6 +23,7 @@ interface UserAgentYaml {
   name: string;
   template: string;
   command: string;
+  defaultArgs?: string[];
   authVolumes?: { name: string; target: string }[];
   defaultSecrets?: string[];
   defaultDomains?: string[];
@@ -35,6 +36,7 @@ async function loadUserAgent(name: string): Promise<AgentDefinition | null> {
     return {
       template: parsed.template,
       command: parsed.command,
+      defaultArgs: parsed.defaultArgs ?? [],
       authVolumes: (parsed.authVolumes ?? []).map((v) => ({
         type: "volume" as const,
         name: v.name,

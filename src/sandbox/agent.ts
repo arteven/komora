@@ -2,10 +2,13 @@ import type { Sandbox } from "microsandbox";
 
 export interface RunAgentInput {
   sandbox: Sandbox;
-  agent: string;
+  command: string;
+  defaultArgs: string[];
   argv: string[];
+  workspaceDir: string;
 }
 
 export function runAgent(input: RunAgentInput): Promise<number> {
-  return input.sandbox.attach(input.agent, input.argv);
+  const args = [...input.defaultArgs, ...input.argv];
+  return input.sandbox.attachWith(input.command, (b) => b.args(args).cwd(input.workspaceDir));
 }

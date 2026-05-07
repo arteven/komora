@@ -32,7 +32,7 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     }
   }
 
-  const workspaceBind = { type: "bind" as const, source: workspaceDir, target: "/workspace" };
+  const workspaceBind = { type: "bind" as const, source: workspaceDir, target: workspaceDir };
   const agentAuthVolumes = bare ? [] : agentDef.authVolumes;
   const repoMounts = (repoConfig.mounts ?? []).map((m) =>
     m.source ? { ...m, source: resolveSource(m.source, workspaceDir) } : m,

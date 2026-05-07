@@ -5,5 +5,5 @@ export async function exec(name: string, cmd: string, args: string[]): Promise<n
   const status = await msb.status(name);
   if (status !== "running") throw new Error(`sandbox '${name}' is not running (status: ${status})`);
   const sandbox = await msb.connect(name);
-  return runAgent({ sandbox, agent: cmd, argv: args });
+  return runAgent({ sandbox, command: cmd, defaultArgs: [], argv: args, workspaceDir: process.cwd() });
 }

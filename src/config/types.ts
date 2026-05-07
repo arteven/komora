@@ -8,6 +8,7 @@ export interface Mount {
 export interface AgentDefinition {
   template: string;
   command: string;
+  defaultArgs: string[];
   authVolumes: Mount[];
   defaultSecrets: string[];
   defaultDomains: string[];

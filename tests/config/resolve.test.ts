@@ -5,6 +5,7 @@ import type { AgentDefinition, RepoConfig } from "../../src/config/types.js";
 const claude: AgentDefinition = {
   template: "docker/sandbox-templates:claude-code-docker",
   command: "claude",
+  defaultArgs: ["--dangerously-skip-permissions"],
   authVolumes: [{ type: "volume", name: "claude-auth", target: "/home/agent/.claude" }],
   defaultSecrets: ["ANTHROPIC_API_KEY"],
   defaultDomains: ["api.anthropic.com", "auth.anthropic.com"],
@@ -24,7 +25,7 @@ describe("resolveConfig v2", () => {
     expect(resolved.image).toBe("docker/sandbox-templates:claude-code-docker");
     expect(resolved.command).toBe("claude");
     expect(resolved.mounts).toEqual([
-      { type: "bind", source: "/home/user/project", target: "/workspace" },
+      { type: "bind", source: "/home/user/project", target: "/home/user/project" },
       { type: "volume", name: "claude-auth", target: "/home/agent/.claude" },
     ]);
     expect(resolved.secrets).toEqual(["ANTHROPIC_API_KEY"]);
@@ -69,7 +70,7 @@ describe("resolveConfig v2", () => {
     });
     expect(resolved.bare).toBe(true);
     expect(resolved.mounts).toEqual([
-      { type: "bind", source: "/home/user/project", target: "/workspace" },
+      { type: "bind", source: "/home/user/project", target: "/home/user/project" },
     ]);
     expect(resolved.secrets).toEqual([]);
     expect(resolved.domains).toEqual([]);

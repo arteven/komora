@@ -31,7 +31,7 @@ describe("exec command", () => {
     (msb.status as ReturnType<typeof vi.fn>).mockResolvedValue("running");
     const code = await exec("name", "ls", ["-la"]);
     expect(msb.connect).toHaveBeenCalledWith("name");
-    expect(runAgent).toHaveBeenCalledWith({ sandbox: mockSandbox, agent: "ls", argv: ["-la"] });
+    expect(runAgent).toHaveBeenCalledWith({ sandbox: mockSandbox, command: "ls", defaultArgs: [], argv: ["-la"], workspaceDir: expect.any(String) });
     expect(code).toBe(0);
   });
 });

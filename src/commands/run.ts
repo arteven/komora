@@ -28,5 +28,11 @@ export async function run(opts: RunOpts): Promise<number> {
   }
 
   const sandbox = await ensureSandbox(cfg, { verbose: opts.verbose });
-  return runAgent({ sandbox, agent: cfg.agent, argv: opts.argv });
+  return runAgent({
+    sandbox,
+    command: cfg.command,
+    defaultArgs: cfg.agentDef.defaultArgs,
+    argv: opts.argv,
+    workspaceDir: cfg.workspaceDir,
+  });
 }
