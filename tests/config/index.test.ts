@@ -5,7 +5,11 @@ vi.mock("../../src/agents/registry.js", () => ({
   getAgent: vi.fn().mockResolvedValue({
     template: "docker/sandbox-templates:claude-code-docker",
     command: "claude",
-    authVolumes: [{ type: "volume", name: "claude-auth", target: "/home/agent/.claude" }],
+    defaultArgs: ["--dangerously-skip-permissions"],
+    authVolumes: [
+      { type: "volume", name: "claude-home", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" },
+    ],
     defaultSecrets: ["ANTHROPIC_API_KEY"],
     defaultDomains: ["api.anthropic.com"],
   }),

@@ -15,7 +15,8 @@ describe("agent registry", () => {
     expect(agent.template).toBe("docker/sandbox-templates:claude-code-docker");
     expect(agent.command).toBe("claude");
     expect(agent.authVolumes).toEqual([
-      { type: "volume", name: "claude-auth", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-home", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" },
     ]);
     expect(agent.defaultSecrets).toContain("ANTHROPIC_API_KEY");
     expect(agent.defaultDomains).toContain("api.anthropic.com");

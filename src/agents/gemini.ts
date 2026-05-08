@@ -4,7 +4,7 @@ export const gemini: AgentDefinition = {
   template: "docker/sandbox-templates:gemini-docker",
   command: "gemini",
   defaultArgs: [],
-  authVolumes: [{ type: "volume", name: "gemini-auth", target: "/home/agent/.gemini" }],
+  authVolumes: [{ type: "volume", name: "gemini-home", target: "/home/agent/.gemini" }],
   defaultSecrets: ["GEMINI_API_KEY"],
   defaultDomains: ["generativelanguage.googleapis.com"],
 };
