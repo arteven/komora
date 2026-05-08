@@ -49,7 +49,7 @@ program
   .allowUnknownOption(true)
   .description("Find-or-create the sandbox and run the agent (everything after `--` is forwarded).")
   .action(async (agent, opts, command) => {
-    const argv = command.args;
+    const argv = command.args.slice(1);
     process.exit(
       await run({
         agent,
