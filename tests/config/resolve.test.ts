@@ -237,4 +237,32 @@ describe("resolveConfig v2", () => {
     expect(resolved.mounts[1]).toEqual({ type: "volume", name: "claude-home", target: "/home/agent/.claude" });
     expect(resolved.mounts[2]).toEqual({ type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" });
   });
+
+  it("rejects invalid profile name", () => {
+    expect(() =>
+      resolveConfig({
+        agent: "claude",
+        agentDef: claude,
+        repoConfig: emptyRepo,
+        workspaceDir: "/tmp",
+        workspaceSlug: "tmp",
+        profile: "Work_Bad!",
+      })
+    ).toThrow(/invalid profile/i);
+  });
+
+  it("accepts valid profile names", () => {
+    for (const name of ["work", "personal", "my-team", "dev-2"]) {
+      expect(() =>
+        resolveConfig({
+          agent: "claude",
+          agentDef: claude,
+          repoConfig: emptyRepo,
+          workspaceDir: "/tmp",
+          workspaceSlug: "tmp",
+          profile: name,
+        })
+      ).not.toThrow();
+    }
+  });
 });

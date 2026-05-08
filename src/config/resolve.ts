@@ -3,6 +3,7 @@ import type { AgentDefinition, RepoConfig, ResolvedConfig } from "./types.js";
 import { sandboxName } from "../sandbox/naming.js";
 
 const RAW_CONFLICT_KEYS = new Set(["env", "mounts", "secrets", "image", "name"]);
+const PROFILE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export interface ResolveInput {
   agent: string;
@@ -25,6 +26,10 @@ function resolveSource(source: string, workspaceDir: string): string {
 
 export function resolveConfig(input: ResolveInput): ResolvedConfig {
   const { agent, agentDef, repoConfig, workspaceDir, workspaceSlug, nameOverride, bare, profile } = input;
+
+  if (profile !== undefined && !PROFILE_RE.test(profile)) {
+    throw new Error(`invalid profile name '${profile}': must be lowercase alphanumeric with hyphens`);
+  }
 
   const raw = repoConfig.raw ?? {};
   for (const key of Object.keys(raw)) {
