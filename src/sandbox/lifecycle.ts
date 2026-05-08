@@ -71,6 +71,8 @@ export async function ensureSandbox(
       const sandbox = await msb.create({
         name: cfg.sandboxName,
         image: cfg.image,
+        memoryMib: cfg.agentDef.memoryMib,
+        cpus: cfg.agentDef.cpus,
         mounts: cfg.mounts,
         env: cfg.env,
         secretArgs,

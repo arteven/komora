@@ -6,6 +6,8 @@ import { log } from "../util/log.js";
 export interface SdkCreateInput {
   name: string;
   image: string;
+  memoryMib?: number;
+  cpus?: number;
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
@@ -132,6 +134,9 @@ export const sdk = {
     warnUnmappedRaw(input.raw);
 
     let builder = Sandbox.builder(input.name).image(input.image);
+
+    if (input.memoryMib) builder = builder.memory(input.memoryMib);
+    if (input.cpus) builder = builder.cpus(input.cpus);
 
     for (const [k, v] of Object.entries(input.env)) {
       builder = builder.env(k, v);

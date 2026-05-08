@@ -9,6 +9,8 @@ export interface AgentDefinition {
   template: string;
   command: string;
   defaultArgs: string[];
+  memoryMib?: number;
+  cpus?: number;
   authVolumes: Mount[];
   defaultSecrets: string[];
   defaultDomains: string[];

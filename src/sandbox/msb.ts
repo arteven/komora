@@ -7,6 +7,8 @@ export type SandboxStatus = "running" | "stopped" | "missing";
 export interface CreateInput {
   name: string;
   image: string;
+  memoryMib?: number;
+  cpus?: number;
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
