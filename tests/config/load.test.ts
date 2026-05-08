@@ -39,4 +39,13 @@ network:
   it("throws on v1-style config with agent field", () => {
     expect(() => parseRepoConfig("agent: claude\nprofile: nodejs")).toThrow();
   });
+
+  it("parses config with profile", () => {
+    const cfg = parseRepoConfig("profile: work");
+    expect(cfg.profile).toBe("work");
+  });
+
+  it("rejects invalid profile name", () => {
+    expect(() => parseRepoConfig("profile: Work_Bad!")).toThrow();
+  });
 });

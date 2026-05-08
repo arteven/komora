@@ -46,6 +46,7 @@ const repoConfigSchema = {
     secrets: { type: "array", items: { type: "string" } },
     network: networkSchema,
     raw: { type: "object" },
+    profile: { type: "string", pattern: "^[a-z0-9]+(-[a-z0-9]+)*$" },
   },
   additionalProperties: false,
 };

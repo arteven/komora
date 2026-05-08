@@ -29,10 +29,12 @@ describe("v2 types", () => {
         serviceDomains: { "api.github.com": "GITHUB_TOKEN" },
       },
       raw: { cpus: 4 },
+      profile: "work",
     };
     expect(cfg.toolchain![0]).toEqual({ node: "22" });
     expect(cfg.secrets).toContain("GITHUB_TOKEN");
     expect(cfg.network!.serviceDomains!["api.github.com"]).toBe("GITHUB_TOKEN");
+    expect(cfg.profile).toBe("work");
   });
 
   it("ResolvedConfig merges agent + repo", () => {
@@ -58,8 +60,10 @@ describe("v2 types", () => {
       workspaceDir: "/tmp/test",
       workspaceSlug: "test",
       sandboxName: "test-claude",
+      profile: "work",
     };
     expect(resolved.sandboxName).toBe("test-claude");
     expect(resolved.bare).toBe(false);
+    expect(resolved.profile).toBe("work");
   });
 });

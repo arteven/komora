@@ -29,6 +29,7 @@ export interface RepoConfig {
   secrets?: string[];
   network?: NetworkConfig;
   raw?: Record<string, unknown>;
+  profile?: string;
 }
 
 export interface ResolvedConfig {
@@ -47,4 +48,5 @@ export interface ResolvedConfig {
   workspaceDir: string;
   workspaceSlug: string;
   sandboxName: string;
+  profile?: string;
 }
