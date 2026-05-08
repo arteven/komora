@@ -37,7 +37,7 @@ network:
   });
 
   it("throws on v1-style config with agent field", () => {
-    expect(() => parseRepoConfig("agent: claude\nprofile: nodejs")).toThrow();
+    expect(() => parseRepoConfig("agent: claude")).toThrow();
   });
 
   it("parses config with profile", () => {
