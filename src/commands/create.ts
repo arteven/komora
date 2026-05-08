@@ -3,17 +3,20 @@ import { ensureSandbox } from "../sandbox/lifecycle.js";
 
 export interface CreateOpts {
   agent?: string;
-  profile?: string;
   name?: string;
+  bare?: boolean;
+  profile?: string;
+  verbose?: boolean;
   workspaceDir: string;
 }
 
 export async function create(opts: CreateOpts): Promise<void> {
   const cfg = await loadResolvedConfig({
     workspaceDir: opts.workspaceDir,
-    agentOverride: opts.agent,
-    profileOverride: opts.profile,
+    agent: opts.agent,
     nameOverride: opts.name,
+    bare: opts.bare,
+    profile: opts.profile,
   });
-  await ensureSandbox(cfg);
+  await ensureSandbox(cfg, { verbose: opts.verbose });
 }

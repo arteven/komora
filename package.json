@@ -7,7 +7,7 @@
     "komora": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p . && node -e \"require('node:fs').cpSync('src/profiles/builtin','dist/profiles/builtin',{recursive:true})\"",
+    "build": "tsc -p . && node -e \"require('node:fs').cpSync('src/toolchains','dist/toolchains',{recursive:true,filter:(s)=>s.endsWith('.sh')||require('node:fs').statSync(s).isDirectory()})\"",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -21,10 +21,8 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "commander": "^12.1.0",
-    "execa": "^9.5.1",
     "js-yaml": "^4.1.0",
     "microsandbox": "^0.4.2",
-    "node-pty": "^1.0.0",
     "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
@@ -37,7 +35,7 @@
   },
   "files": [
     "dist/",
-    "src/profiles/builtin/",
+    "src/toolchains/",
     "schema/"
   ]
 }

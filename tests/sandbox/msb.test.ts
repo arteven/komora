@@ -4,6 +4,7 @@ const { mockSdk } = vi.hoisted(() => ({
   mockSdk: {
     create: vi.fn(),
     start: vi.fn(),
+    connect: vi.fn(),
     stop: vi.fn(),
     rm: vi.fn(),
     list: vi.fn(),
@@ -55,6 +56,7 @@ describe("msb adapter", () => {
 
   it.each([
     ["start", "start"],
+    ["connect", "connect"],
     ["stop", "stop"],
     ["rm", "rm"],
   ] as const)("%s() forwards the name to sdk.%s", async (method, sdkMethod) => {

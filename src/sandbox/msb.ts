@@ -1,3 +1,4 @@
+import type { Sandbox } from "microsandbox";
 import { sdk } from "./_sdk.js";
 import type { Mount } from "../config/types.js";
 
@@ -6,9 +7,12 @@ export type SandboxStatus = "running" | "stopped" | "missing";
 export interface CreateInput {
   name: string;
   image: string;
+  memoryMib?: number;
+  cpus?: number;
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
+  domains: string[];
   raw: Record<string, unknown>;
 }
 
@@ -17,20 +21,15 @@ export interface ListItem {
   status: "running" | "stopped";
 }
 
-export interface ExecCommand {
-  command: string;
-  args: string[];
-}
-
 export const msb = {
-  execCommand(sandbox: string, cmd: string, args: string[]): ExecCommand {
-    return { command: "msb", args: ["exec", sandbox, cmd, ...args] };
-  },
-  async create(input: CreateInput): Promise<{ id: string }> {
+  async create(input: CreateInput): Promise<Sandbox> {
     return sdk.create(input);
   },
-  async start(name: string): Promise<void> {
+  async start(name: string): Promise<Sandbox> {
     return sdk.start(name);
+  },
+  async connect(name: string): Promise<Sandbox> {
+    return sdk.connect(name);
   },
   async stop(name: string): Promise<void> {
     return sdk.stop(name);

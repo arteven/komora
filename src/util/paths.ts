@@ -23,6 +23,10 @@ export function userProfilesDir(): string {
   return path.join(configDir(), "profiles");
 }
 
+export function userAgentsDir(): string {
+  return path.join(configDir(), "agents");
+}
+
 export function lockFile(sandboxName: string): string {
   return path.join(stateDir(), "locks", `${sandboxName}.lock`);
 }

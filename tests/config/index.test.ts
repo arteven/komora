@@ -1,46 +1,113 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadResolvedConfig } from "../../src/config/index.js";
 
-describe("loadResolvedConfig", () => {
-  let workdir: string;
-  let configHome: string;
+vi.mock("../../src/agents/registry.js", () => ({
+  getAgent: vi.fn().mockResolvedValue({
+    template: "docker/sandbox-templates:claude-code-docker",
+    command: "claude",
+    defaultArgs: ["--dangerously-skip-permissions"],
+    authVolumes: [
+      { type: "volume", name: "claude-home", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" },
+    ],
+    defaultSecrets: ["ANTHROPIC_API_KEY"],
+    defaultDomains: ["api.anthropic.com"],
+  }),
+}));
 
-  beforeEach(async () => {
-    workdir = await fs.mkdtemp(path.join(os.tmpdir(), "komora-cfg-"));
-    configHome = await fs.mkdtemp(path.join(os.tmpdir(), "komora-home-"));
-    process.env.XDG_CONFIG_HOME = configHome;
+vi.mock("node:fs/promises");
+
+describe("loadResolvedConfig v2", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  afterEach(async () => {
-    delete process.env.XDG_CONFIG_HOME;
-    await fs.rm(workdir, { recursive: true, force: true });
-    await fs.rm(configHome, { recursive: true, force: true });
+  it("loads with no komora.config.yaml (zero-config)", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+    });
+    expect(cfg.agent).toBe("claude");
+    expect(cfg.image).toBe("docker/sandbox-templates:claude-code-docker");
+    expect(cfg.sandboxName).toBe("project-claude");
+    expect(cfg.profile).toBeUndefined();
   });
 
-  it("loads repo config + profile and returns ResolvedConfig", async () => {
-    await fs.writeFile(path.join(workdir, "komora.config.yaml"), "agent: claude\nprofile: minimal\n");
-    await fs.mkdir(path.join(workdir, ".komora", "profiles"), { recursive: true });
-    await fs.writeFile(path.join(workdir, ".komora", "profiles", "minimal.yaml"), "name: minimal\nimage: img:t\n");
+  it("loads with komora.config.yaml", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue(`
+toolchain:
+  - node: "22"
+secrets:
+  - GITHUB_TOKEN
+`);
 
-    const r = await loadResolvedConfig({ workspaceDir: workdir });
-    expect(r.agent).toBe("claude");
-    expect(r.profile.image).toBe("img:t");
-    expect(r.sandboxName.endsWith("-claude-minimal")).toBe(true);
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+    });
+    expect(cfg.toolchain).toEqual([{ node: "22" }]);
+    expect(cfg.secrets).toContain("GITHUB_TOKEN");
+    expect(cfg.secrets).toContain("ANTHROPIC_API_KEY");
   });
 
-  it("uses --agent and --profile overrides when no repo config exists", async () => {
-    await fs.mkdir(path.join(configHome, "komora", "profiles"), { recursive: true });
-    await fs.writeFile(path.join(configHome, "komora", "profiles", "minimal.yaml"), "name: minimal\nimage: img:t\n");
+  it("requires agent argument", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
 
-    const r = await loadResolvedConfig({ workspaceDir: workdir, agentOverride: "claude", profileOverride: "minimal" });
-    expect(r.agent).toBe("claude");
-    expect(r.profile.name).toBe("minimal");
+    await expect(
+      loadResolvedConfig({ workspaceDir: "/tmp" })
+    ).rejects.toThrow(/agent.*required/i);
   });
 
-  it("throws when no repo config and no agent/profile overrides", async () => {
-    await expect(loadResolvedConfig({ workspaceDir: workdir })).rejects.toThrow(/no komora\.config\.yaml/i);
+  it("passes --bare flag through", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+      bare: true,
+    });
+    expect(cfg.bare).toBe(true);
+    expect(cfg.secrets).toEqual([]);
+  });
+
+  it("passes --name override through", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+      nameOverride: "my-sandbox",
+    });
+    expect(cfg.sandboxName).toBe("my-sandbox");
+  });
+
+  it("reads profile from komora.config.yaml", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue("profile: work\n");
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+    });
+    expect(cfg.profile).toBe("work");
+  });
+
+  it("CLI profile overrides config file profile", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue("profile: personal\n");
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+      profile: "work",
+    });
+    expect(cfg.profile).toBe("work");
   });
 });

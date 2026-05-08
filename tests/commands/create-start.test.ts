@@ -1,25 +1,52 @@
-import { describe, it, expect, vi } from "vitest";
-vi.mock("../../src/config/index.js", () => ({ loadResolvedConfig: vi.fn() }));
-vi.mock("../../src/sandbox/lifecycle.js", () => ({ ensureSandbox: vi.fn() }));
-vi.mock("../../src/sandbox/msb.js", () => ({ msb: { start: vi.fn() } }));
-
-import { loadResolvedConfig } from "../../src/config/index.js";
-import { ensureSandbox } from "../../src/sandbox/lifecycle.js";
-import { msb } from "../../src/sandbox/msb.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { create } from "../../src/commands/create.js";
 import { start } from "../../src/commands/start.js";
 
-const fakeCfg = { sandboxName: "foo-claude-nodejs" } as never;
+vi.mock("../../src/config/index.js", () => ({
+  loadResolvedConfig: vi.fn().mockResolvedValue({
+    agent: "claude",
+    sandboxName: "test-claude",
+  }),
+}));
 
-describe("create/start commands", () => {
-  it("create resolves config and ensures sandbox without running an agent", async () => {
-    (loadResolvedConfig as ReturnType<typeof vi.fn>).mockResolvedValue(fakeCfg);
-    await create({ agent: "claude", profile: "nodejs", workspaceDir: "/tmp/foo" });
-    expect(ensureSandbox).toHaveBeenCalledWith(fakeCfg);
+vi.mock("../../src/sandbox/lifecycle.js", () => ({
+  ensureSandbox: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock("../../src/sandbox/msb.js", () => ({
+  msb: { start: vi.fn().mockResolvedValue(undefined) },
+}));
+
+describe("create", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("calls ensureSandbox", async () => {
+    const { ensureSandbox } = await import("../../src/sandbox/lifecycle.js");
+    await create({ agent: "claude", workspaceDir: "/tmp" });
+    expect(ensureSandbox).toHaveBeenCalled();
   });
 
-  it("start calls msb.start by name", async () => {
-    await start("foo-claude-nodejs");
-    expect(msb.start).toHaveBeenCalledWith("foo-claude-nodejs");
+  it("passes bare flag", async () => {
+    const { loadResolvedConfig } = await import("../../src/config/index.js");
+    await create({ agent: "claude", workspaceDir: "/tmp", bare: true });
+    expect(loadResolvedConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ bare: true })
+    );
+  });
+
+  it("passes profile flag", async () => {
+    const { loadResolvedConfig } = await import("../../src/config/index.js");
+    await create({ agent: "claude", workspaceDir: "/tmp", profile: "work" });
+    expect(loadResolvedConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: "work" })
+    );
+  });
+});
+
+describe("start", () => {
+  it("calls msb.start", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    await start("my-sandbox");
+    expect(msb.start).toHaveBeenCalledWith("my-sandbox");
   });
 });

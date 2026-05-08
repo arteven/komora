@@ -1,4 +1,4 @@
-import { Sandbox } from "microsandbox";
+import { Sandbox, Volume, VolumeAlreadyExistsError } from "microsandbox";
 import type { SandboxStatus as SdkSandboxStatus } from "microsandbox";
 import type { Mount } from "../config/types.js";
 import { log } from "../util/log.js";
@@ -6,9 +6,12 @@ import { log } from "../util/log.js";
 export interface SdkCreateInput {
   name: string;
   image: string;
+  memoryMib?: number;
+  cpus?: number;
   mounts: Mount[];
   env: Record<string, string>;
   secretArgs: string[];
+  domains: string[];
   raw: Record<string, unknown>;
 }
 
@@ -118,11 +121,22 @@ export function warnUnmappedRaw(
   );
 }
 
+export function buildSecretArgs(values: Record<string, string>): string[] {
+  const args: string[] = [];
+  for (const [name, value] of Object.entries(values)) {
+    args.push("--secret", `${name}=${value}`);
+  }
+  return args;
+}
+
 export const sdk = {
-  async create(input: SdkCreateInput): Promise<{ id: string }> {
+  async create(input: SdkCreateInput): Promise<Sandbox> {
     warnUnmappedRaw(input.raw);
 
     let builder = Sandbox.builder(input.name).image(input.image);
+
+    if (input.memoryMib) builder = builder.memory(input.memoryMib);
+    if (input.cpus) builder = builder.cpus(input.cpus);
 
     for (const [k, v] of Object.entries(input.env)) {
       builder = builder.env(k, v);
@@ -144,6 +158,11 @@ export const sdk = {
           );
         }
         const named = m.name;
+        try {
+          await Volume.builder(named).create();
+        } catch (e) {
+          if (!(e instanceof VolumeAlreadyExistsError)) throw e;
+        }
         builder = builder.volume(m.target, (b) => b.named(named));
       }
     }
@@ -157,15 +176,25 @@ export const sdk = {
       });
     }
 
-    await builder.create();
-    // The SDK does not surface an opaque ID; use the sandbox name as the id.
-    return { id: input.name };
+    if (input.secretArgs.length > 0 && input.domains.length > 0) {
+      builder = builder.network((n: any) =>
+        n.tls((t: any) => {
+          for (const d of input.domains) t = t.bypass(d);
+          return t;
+        }),
+      );
+    }
+
+    return builder.create();
   },
 
-  async start(name: string): Promise<void> {
-    // TODO(phase-6): consider Sandbox.startDetached(name) for daemon-style
-    // lifecycle; current attached handle is dropped.
-    await Sandbox.start(name);
+  async start(name: string): Promise<Sandbox> {
+    return Sandbox.start(name);
+  },
+
+  async connect(name: string): Promise<Sandbox> {
+    const handle = await Sandbox.get(name);
+    return handle.connect();
   },
 
   /**
@@ -178,11 +207,9 @@ export const sdk = {
    * benign concurrent removal and resolve.
    */
   async stop(name: string): Promise<void> {
-    const handles = await Sandbox.list();
-    const found = handles.find((h) => h.name === name);
-    if (!found) return;
     try {
-      await found.stop();
+      const handle = await Sandbox.get(name);
+      await handle.stop();
     } catch (e) {
       if (isNotFoundError(e)) return;
       throw e;

@@ -8,9 +8,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
+
+    const mockSandbox = {
+      exec: vi.fn(),
+      shell: vi.fn(),
+      attach: vi.fn(),
+      stop: vi.fn(),
+    };
 
     // Mount sub-builder passed into `volume(target, fn)`.
     const mountBuilder = {
@@ -72,8 +79,13 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic } =
       ),
       create: vi.fn(async () => {
         calls.push({ method: "create", args: [] });
-        return {};
+        return mockSandbox;
       }),
+    };
+
+    const liveHandle = {
+      stop: vi.fn(async () => {}),
+      connect: vi.fn(async () => mockSandbox),
     };
 
     const sandboxStatic = {
@@ -83,23 +95,33 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic } =
       }),
       start: vi.fn(async (name: string) => {
         calls.push({ method: "Sandbox.start", args: [name] });
-        return {};
+        return mockSandbox;
       }),
+      get: vi.fn(async (_name: string) => liveHandle),
       list: vi.fn(async () => [] as Array<{
         name: string;
         status: string;
-        stop: () => Promise<void>;
       }>),
       remove: vi.fn(async (name: string) => {
         calls.push({ method: "Sandbox.remove", args: [name] });
       }),
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic };
+    const volumeBuilderSpy = {
+      create: vi.fn(async () => ({})),
+    };
+
+    const volumeStatic = {
+      builder: vi.fn((_name: string) => volumeBuilderSpy),
+    };
+
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox };
   });
 
 vi.mock("microsandbox", () => ({
   Sandbox: sandboxStatic,
+  Volume: volumeStatic,
+  VolumeAlreadyExistsError: class VolumeAlreadyExistsError extends Error {},
 }));
 
 import { sdk } from "../../src/sandbox/_sdk.js";
@@ -120,8 +142,17 @@ beforeEach(() => {
     secretBuilder.allowHost,
     sandboxStatic.builder,
     sandboxStatic.start,
+    sandboxStatic.get,
     sandboxStatic.list,
     sandboxStatic.remove,
+    liveHandle.stop,
+    liveHandle.connect,
+    volumeStatic.builder,
+    volumeBuilderSpy.create,
+    mockSandbox.exec,
+    mockSandbox.shell,
+    mockSandbox.attach,
+    mockSandbox.stop,
   ].forEach((m) => m.mockClear());
   // Restore default list resolution.
   sandboxStatic.list.mockResolvedValue([] as never);
@@ -143,10 +174,11 @@ describe("sdk.create", () => {
         "--secret",
         "BAZ=qux@example.com",
       ],
+      domains: [],
       raw: {},
     });
 
-    expect(got).toEqual({ id: "name" });
+    expect(got).toBe(mockSandbox);
 
     // Filter to just the high-level builder ops for a stable assertion.
     const seq = calls.map((c) => `${c.method}(${JSON.stringify(c.args)})`);
@@ -168,6 +200,7 @@ describe("sdk.create", () => {
       'secret.allowHost(["example.com"])',
       'create([])',
     ]);
+    expect(volumeStatic.builder).toHaveBeenCalledWith("v2");
   });
 
   it("does not call allowHost for hostless secrets", async () => {
@@ -177,6 +210,7 @@ describe("sdk.create", () => {
       mounts: [],
       env: {},
       secretArgs: ["--secret", "X=y"],
+      domains: [],
       raw: {},
     });
     expect(secretBuilder.allowHost).not.toHaveBeenCalled();
@@ -190,6 +224,7 @@ describe("sdk.create", () => {
         mounts: [{ type: "bind", target: "/c" }],
         env: {},
         secretArgs: [],
+        domains: [],
         raw: {},
       }),
     ).rejects.toThrow(/bind mount missing source/);
@@ -203,6 +238,7 @@ describe("sdk.create", () => {
         mounts: [{ type: "volume", target: "/c" }],
         env: {},
         secretArgs: [],
+        domains: [],
         raw: {},
       }),
     ).rejects.toThrow(/volume mount missing name/);
@@ -210,9 +246,10 @@ describe("sdk.create", () => {
 });
 
 describe("sdk.start", () => {
-  it("forwards to Sandbox.start", async () => {
-    await sdk.start("x");
+  it("forwards to Sandbox.start and returns the Sandbox", async () => {
+    const result = await sdk.start("x");
     expect(sandboxStatic.start).toHaveBeenCalledWith("x");
+    expect(result).toBe(mockSandbox);
   });
 });
 
@@ -241,38 +278,25 @@ describe("sdk.list", () => {
 });
 
 describe("sdk.stop", () => {
-  it("calls stop() on the matching handle", async () => {
-    const stopFn = vi.fn(async () => {});
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+  it("calls stop() on the live handle from Sandbox.get()", async () => {
     await sdk.stop("a");
-    expect(stopFn).toHaveBeenCalledTimes(1);
+    expect(sandboxStatic.get).toHaveBeenCalledWith("a");
+    expect(liveHandle.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op when the name is not in list() (does NOT throw)", async () => {
-    sandboxStatic.list.mockResolvedValue([] as never);
+  it("is a no-op when sandbox is not found", async () => {
+    sandboxStatic.get.mockRejectedValueOnce(new Error("sandbox not found: ghost"));
     await expect(sdk.stop("ghost")).resolves.toBeUndefined();
   });
 
   it("treats a 'not found'-shaped error from handle.stop() as success (race window)", async () => {
-    const stopFn = vi.fn(async () => {
-      throw new Error("sandbox not found: a");
-    });
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+    liveHandle.stop.mockRejectedValueOnce(new Error("sandbox not found: a"));
     await expect(sdk.stop("a")).resolves.toBeUndefined();
-    expect(stopFn).toHaveBeenCalled();
+    expect(liveHandle.stop).toHaveBeenCalled();
   });
 
   it("rethrows other errors from handle.stop()", async () => {
-    const stopFn = vi.fn(async () => {
-      throw new Error("kvm refused");
-    });
-    sandboxStatic.list.mockResolvedValue([
-      { name: "a", status: "running", stop: stopFn },
-    ] as never);
+    liveHandle.stop.mockRejectedValueOnce(new Error("kvm refused"));
     await expect(sdk.stop("a")).rejects.toThrow(/kvm refused/);
   });
 });

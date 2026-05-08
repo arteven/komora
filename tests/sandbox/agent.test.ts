@@ -1,25 +1,53 @@
 import { describe, it, expect, vi } from "vitest";
 
-const events: Record<string, ((data: unknown) => void)[]> = {};
-const ptyMock = {
-  onData: (cb: (s: string) => void) => { (events.data ??= []).push(cb); return { dispose: () => undefined }; },
-  onExit: (cb: (e: { exitCode: number; signal?: number }) => void) => { (events.exit ??= []).push(cb); return { dispose: () => undefined }; },
-  resize: vi.fn(),
-  kill: vi.fn(),
-  write: vi.fn(),
-};
-vi.mock("node-pty", () => ({ spawn: vi.fn(() => ptyMock) }));
+const mockBuilder = vi.hoisted(() => ({
+  args: vi.fn().mockReturnThis(),
+  cwd: vi.fn().mockReturnThis(),
+}));
 
-vi.mock("../../src/sandbox/msb.js", () => ({
-  msb: { execCommand: vi.fn(() => ({ command: "msb", args: ["exec", "name", "claude"] })) },
+const mockSandbox = vi.hoisted(() => ({
+  attachWith: vi.fn(),
+}));
+
+vi.mock("microsandbox", () => ({
+  Sandbox: {},
 }));
 
 import { runAgent } from "../../src/sandbox/agent.js";
 
 describe("runAgent", () => {
-  it("returns the exit code from the in-sandbox process verbatim", async () => {
-    const promise = runAgent({ name: "name", agent: "claude", argv: [] });
-    setTimeout(() => events.exit?.[0]({ exitCode: 7 }), 0);
-    await expect(promise).resolves.toBe(7);
+  it("returns the exit code from sandbox.attachWith()", async () => {
+    mockSandbox.attachWith.mockImplementation(async (_cmd: string, configure: (b: typeof mockBuilder) => typeof mockBuilder) => {
+      configure(mockBuilder);
+      return 7;
+    });
+    const result = await runAgent({
+      sandbox: mockSandbox as any,
+      command: "claude",
+      defaultArgs: ["--dangerously-skip-permissions"],
+      argv: ["--help"],
+      workspaceDir: "/home/user/project",
+    });
+    expect(result).toBe(7);
+    expect(mockSandbox.attachWith).toHaveBeenCalledWith("claude", expect.any(Function));
+    expect(mockBuilder.args).toHaveBeenCalledWith(["--dangerously-skip-permissions", "--help"]);
+    expect(mockBuilder.cwd).toHaveBeenCalledWith("/home/user/project");
+  });
+
+  it("forwards argv merged with defaultArgs", async () => {
+    mockSandbox.attachWith.mockImplementation(async (_cmd: string, configure: (b: typeof mockBuilder) => typeof mockBuilder) => {
+      configure(mockBuilder);
+      return 0;
+    });
+    await runAgent({
+      sandbox: mockSandbox as any,
+      command: "bash",
+      defaultArgs: [],
+      argv: ["-c", "echo hi"],
+      workspaceDir: "/tmp",
+    });
+    expect(mockSandbox.attachWith).toHaveBeenCalledWith("bash", expect.any(Function));
+    expect(mockBuilder.args).toHaveBeenCalledWith(["-c", "echo hi"]);
+    expect(mockBuilder.cwd).toHaveBeenCalledWith("/tmp");
   });
 });

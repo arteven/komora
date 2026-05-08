@@ -1,50 +1,52 @@
 export interface Mount {
   type: "bind" | "volume";
-  source?: string;        // bind only
-  name?: string;          // volume only
+  source?: string;
+  name?: string;
   target: string;
 }
 
-export interface SecretAllowance {
-  name: string;
-  hosts?: string[];
-  requireTls?: boolean;
-  onViolation?: "error";
+export interface AgentDefinition {
+  template: string;
+  command: string;
+  defaultArgs: string[];
+  memoryMib?: number;
+  cpus?: number;
+  authVolumes: Mount[];
+  defaultSecrets: string[];
+  defaultDomains: string[];
 }
 
-export interface NetworkBlock {
+export interface NetworkConfig {
   allowedDomains?: string[];
   serviceDomains?: Record<string, string>;
 }
 
-export interface Profile {
-  name: string;
-  image: string;
-  env?: Record<string, string>;
-  mounts?: Mount[];
-  secrets?: { allowed?: SecretAllowance[] };
-  startup?: string[];
-  network?: NetworkBlock;  // V1 ignores with warning, reserved for V2 kit-compat
-  digest?: string;         // V1 ignores with warning
-}
-
 export interface RepoConfig {
-  agent: string;
-  profile: string;
+  toolchain?: Record<string, string>[];
+  setup?: string[];
   env?: Record<string, string>;
   mounts?: Mount[];
-  secrets?: { allow?: string[] };
-  network?: NetworkBlock;  // V1 ignores with warning
+  secrets?: string[];
+  network?: NetworkConfig;
   raw?: Record<string, unknown>;
+  profile?: string;
 }
 
 export interface ResolvedConfig {
   agent: string;
-  profile: Profile;        // post-merge: env, mounts, secrets, startup all applied
+  agentDef: AgentDefinition;
+  image: string;
+  command: string;
+  env: Record<string, string>;
+  mounts: Mount[];
+  secrets: string[];
+  domains: string[];
+  toolchain: Record<string, string>[];
+  setup: string[];
   raw: Record<string, unknown>;
-  /** Repo-opted-in subset of profile.secrets.allowed names (preserves repo `allow` order). */
-  secretsAllow: string[];
+  bare: boolean;
   workspaceDir: string;
   workspaceSlug: string;
   sandboxName: string;
+  profile?: string;
 }

@@ -1,11 +1,15 @@
+import yaml from "js-yaml";
 import { loadResolvedConfig } from "../config/index.js";
 import { ensureSandbox } from "../sandbox/lifecycle.js";
 import { runAgent } from "../sandbox/agent.js";
 
 export interface RunOpts {
   agent?: string;
-  profile?: string;
   name?: string;
+  bare?: boolean;
+  dryRun?: boolean;
+  profile?: string;
+  verbose?: boolean;
   argv: string[];
   workspaceDir: string;
 }
@@ -13,10 +17,24 @@ export interface RunOpts {
 export async function run(opts: RunOpts): Promise<number> {
   const cfg = await loadResolvedConfig({
     workspaceDir: opts.workspaceDir,
-    agentOverride: opts.agent,
-    profileOverride: opts.profile,
+    agent: opts.agent,
     nameOverride: opts.name,
+    bare: opts.bare,
+    profile: opts.profile,
   });
-  await ensureSandbox(cfg);
-  return runAgent({ name: cfg.sandboxName, agent: cfg.agent, argv: opts.argv });
+
+  if (opts.dryRun) {
+    const { agentDef, ...printable } = cfg;
+    process.stdout.write(yaml.dump(printable, { lineWidth: 120 }));
+    return 0;
+  }
+
+  const sandbox = await ensureSandbox(cfg, { verbose: opts.verbose });
+  return runAgent({
+    sandbox,
+    command: cfg.command,
+    defaultArgs: cfg.agentDef.defaultArgs,
+    argv: opts.argv,
+    workspaceDir: cfg.workspaceDir,
+  });
 }
