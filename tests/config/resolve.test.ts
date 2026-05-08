@@ -6,7 +6,10 @@ const claude: AgentDefinition = {
   template: "docker/sandbox-templates:claude-code-docker",
   command: "claude",
   defaultArgs: ["--dangerously-skip-permissions"],
-  authVolumes: [{ type: "volume", name: "claude-auth", target: "/home/agent/.claude" }],
+  authVolumes: [
+    { type: "volume", name: "claude-home", target: "/home/agent/.claude" },
+    { type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" },
+  ],
   defaultSecrets: ["ANTHROPIC_API_KEY"],
   defaultDomains: ["api.anthropic.com", "auth.anthropic.com"],
 };
@@ -26,7 +29,8 @@ describe("resolveConfig v2", () => {
     expect(resolved.command).toBe("claude");
     expect(resolved.mounts).toEqual([
       { type: "bind", source: "/home/user/project", target: "/home/user/project" },
-      { type: "volume", name: "claude-auth", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-home", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" },
     ]);
     expect(resolved.secrets).toEqual(["ANTHROPIC_API_KEY"]);
     expect(resolved.domains).toEqual(["api.anthropic.com", "auth.anthropic.com"]);
@@ -56,7 +60,7 @@ describe("resolveConfig v2", () => {
     expect(resolved.domains).toContain("api.anthropic.com");
     expect(resolved.domains).toContain("github.com");
     expect(resolved.domains).toContain("api.github.com");
-    expect(resolved.mounts).toHaveLength(3);
+    expect(resolved.mounts).toHaveLength(4);
   });
 
   it("--bare strips agent defaults", () => {
@@ -191,5 +195,46 @@ describe("resolveConfig v2", () => {
     });
     expect(resolved.toolchain).toEqual([{ node: "22" }]);
     expect(resolved.setup).toEqual(["npm ci"]);
+  });
+
+  it("qualifies authVolume names with profile", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
+      profile: "work",
+    });
+    expect(resolved.mounts).toEqual([
+      { type: "bind", source: "/home/user/project", target: "/home/user/project" },
+      { type: "volume", name: "claude-home-work", target: "/home/agent/.claude" },
+      { type: "volume", name: "claude-dotfile-work", target: "/home/agent/.claude.json" },
+    ]);
+    expect(resolved.profile).toBe("work");
+  });
+
+  it("sandbox name includes profile", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
+      profile: "work",
+    });
+    expect(resolved.sandboxName).toBe("project-claude-work");
+  });
+
+  it("no profile leaves volume names unqualified", () => {
+    const resolved = resolveConfig({
+      agent: "claude",
+      agentDef: claude,
+      repoConfig: emptyRepo,
+      workspaceDir: "/home/user/project",
+      workspaceSlug: "project",
+    });
+    expect(resolved.mounts[1]).toEqual({ type: "volume", name: "claude-home", target: "/home/agent/.claude" });
+    expect(resolved.mounts[2]).toEqual({ type: "volume", name: "claude-dotfile", target: "/home/agent/.claude.json" });
   });
 });

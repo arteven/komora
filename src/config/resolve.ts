@@ -12,6 +12,7 @@ export interface ResolveInput {
   workspaceSlug: string;
   nameOverride?: string;
   bare?: boolean;
+  profile?: string;
 }
 
 function resolveSource(source: string, workspaceDir: string): string {
@@ -23,7 +24,7 @@ function resolveSource(source: string, workspaceDir: string): string {
 }
 
 export function resolveConfig(input: ResolveInput): ResolvedConfig {
-  const { agent, agentDef, repoConfig, workspaceDir, workspaceSlug, nameOverride, bare } = input;
+  const { agent, agentDef, repoConfig, workspaceDir, workspaceSlug, nameOverride, bare, profile } = input;
 
   const raw = repoConfig.raw ?? {};
   for (const key of Object.keys(raw)) {
@@ -33,7 +34,9 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
   }
 
   const workspaceBind = { type: "bind" as const, source: workspaceDir, target: workspaceDir };
-  const agentAuthVolumes = bare ? [] : agentDef.authVolumes;
+  const agentAuthVolumes = bare ? [] : agentDef.authVolumes.map((v) =>
+    profile && v.name ? { ...v, name: `${v.name}-${profile}` } : v,
+  );
   const repoMounts = (repoConfig.mounts ?? []).map((m) =>
     m.source ? { ...m, source: resolveSource(m.source, workspaceDir) } : m,
   );
@@ -64,6 +67,7 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     bare: !!bare,
     workspaceDir,
     workspaceSlug,
-    sandboxName: sandboxName({ workspaceSlug, agent, override: nameOverride }),
+    sandboxName: sandboxName({ workspaceSlug, agent, profile, override: nameOverride }),
+    profile,
   };
 }
