@@ -33,9 +33,10 @@ program
   .command("create <agent>")
   .option("--bare", "Strip agent defaults (auth volumes, default secrets, default domains)")
   .option("--name <override>", "Override sandbox name")
+  .option("--profile <name>", "Credential profile name (isolates auth volumes and sandbox)")
   .option("--verbose", "Show init sequence output")
   .description("Create a sandbox without running an agent.")
-  .action((agent, opts) => create({ agent, name: opts.name, bare: !!opts.bare, verbose: !!opts.verbose, workspaceDir: process.cwd() }));
+  .action((agent, opts) => create({ agent, name: opts.name, bare: !!opts.bare, profile: opts.profile, verbose: !!opts.verbose, workspaceDir: process.cwd() }));
 
 program.command("start <name>").description("Start a stopped sandbox.").action((n) => start(n));
 program.command("logs <name>").description("Stream the agent's stderr.").action((n) => logs(n));
@@ -45,6 +46,7 @@ program
   .option("--bare", "Strip agent defaults (auth volumes, default secrets, default domains)")
   .option("--dry-run", "Print resolved config without creating anything")
   .option("--name <override>", "Override sandbox name")
+  .option("--profile <name>", "Credential profile name (isolates auth volumes and sandbox)")
   .option("--verbose", "Show init sequence output")
   .allowUnknownOption(true)
   .description("Find-or-create the sandbox and run the agent (everything after `--` is forwarded).")
@@ -56,6 +58,7 @@ program
         name: opts.name,
         bare: !!opts.bare,
         dryRun: !!opts.dryRun,
+        profile: opts.profile,
         verbose: !!opts.verbose,
         argv,
         workspaceDir: process.cwd(),

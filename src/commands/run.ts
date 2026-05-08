@@ -8,6 +8,7 @@ export interface RunOpts {
   name?: string;
   bare?: boolean;
   dryRun?: boolean;
+  profile?: string;
   verbose?: boolean;
   argv: string[];
   workspaceDir: string;
@@ -19,6 +20,7 @@ export async function run(opts: RunOpts): Promise<number> {
     agent: opts.agent,
     nameOverride: opts.name,
     bare: opts.bare,
+    profile: opts.profile,
   });
 
   if (opts.dryRun) {

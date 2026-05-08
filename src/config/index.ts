@@ -11,6 +11,7 @@ export interface LoadOptions {
   agent?: string;
   nameOverride?: string;
   bare?: boolean;
+  profile?: string;
 }
 
 async function readIfExists(p: string): Promise<string | null> {
@@ -31,6 +32,8 @@ export async function loadResolvedConfig(opts: LoadOptions): Promise<ResolvedCon
 
   const agentDef = await getAgent(opts.agent);
 
+  const profile = opts.profile ?? repoConfig.profile;
+
   return resolveConfig({
     agent: opts.agent,
     agentDef,
@@ -39,5 +42,6 @@ export async function loadResolvedConfig(opts: LoadOptions): Promise<ResolvedCon
     workspaceSlug: workspaceSlug(opts.workspaceDir),
     nameOverride: opts.nameOverride,
     bare: opts.bare,
+    profile,
   });
 }

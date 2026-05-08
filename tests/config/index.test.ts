@@ -86,4 +86,27 @@ secrets:
     });
     expect(cfg.sandboxName).toBe("my-sandbox");
   });
+
+  it("reads profile from komora.config.yaml", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue("profile: work\n");
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+    });
+    expect(cfg.profile).toBe("work");
+  });
+
+  it("CLI profile overrides config file profile", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue("profile: personal\n");
+
+    const cfg = await loadResolvedConfig({
+      workspaceDir: "/home/user/project",
+      agent: "claude",
+      profile: "work",
+    });
+    expect(cfg.profile).toBe("work");
+  });
 });

@@ -48,6 +48,14 @@ describe("run command v2", () => {
     );
   });
 
+  it("passes --profile to loadResolvedConfig", async () => {
+    const { loadResolvedConfig } = await import("../../src/config/index.js");
+    await run({ agent: "claude", argv: [], workspaceDir: "/tmp", profile: "work" });
+    expect(loadResolvedConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: "work" })
+    );
+  });
+
   it("--dry-run prints config without creating sandbox", async () => {
     const { ensureSandbox } = await import("../../src/sandbox/lifecycle.js");
     const { runAgent } = await import("../../src/sandbox/agent.js");
