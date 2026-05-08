@@ -35,6 +35,10 @@ komora run claude --dry-run
 
 # Strip agent defaults (ephemeral, no auth persistence)
 komora run claude --bare
+
+# Credential profiles (isolate auth volumes per account)
+komora run claude --profile work
+komora run claude --profile personal
 ```
 
 ## Editor IntelliSense
@@ -52,7 +56,9 @@ Add this header to `komora.config.yaml`:
 | `komora run <agent> [-- <args>]` | Find-or-create the sandbox and run the agent. |
 | `komora run <agent> --dry-run` | Print resolved config without creating anything. |
 | `komora run <agent> --bare` | Strip agent defaults (auth, secrets, domains). |
+| `komora run <agent> --profile <name>` | Isolate credentials to a named profile. |
 | `komora create <agent>` | Create a sandbox without running an agent. |
+| `komora create <agent> --profile <name>` | Create sandbox with credential profile. |
 | `komora start <name>` | Start a stopped sandbox. |
 | `komora exec <name> <cmd>` | Run a one-off command. Errors if not running. |
 | `komora stop <name>` | Stop a running sandbox. |
@@ -61,4 +67,4 @@ Add this header to `komora.config.yaml`:
 | `komora logs <name>` | Stream the agent's stderr. |
 | `komora secrets {set,list,rm}` | Manage stored secrets. |
 
-See `docs/superpowers/specs/2026-05-06-komora-v2-design.md` for the full design.
+See `docs/architecture.md` for full technical documentation.
