@@ -46,7 +46,7 @@ komora run claude --profile personal
 Add this header to `komora.config.yaml`:
 
 ```yaml
-# yaml-language-server: $schema=https://komora.dev/schema/v2.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/arteven/komora/refs/heads/master/schema/komora.config.v2.json
 ```
 
 ## Commands
