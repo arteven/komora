@@ -33,6 +33,14 @@ describe("create", () => {
       expect.objectContaining({ bare: true })
     );
   });
+
+  it("passes profile flag", async () => {
+    const { loadResolvedConfig } = await import("../../src/config/index.js");
+    await create({ agent: "claude", workspaceDir: "/tmp", profile: "work" });
+    expect(loadResolvedConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: "work" })
+    );
+  });
 });
 
 describe("start", () => {

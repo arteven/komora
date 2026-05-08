@@ -33,6 +33,7 @@ describe("loadResolvedConfig v2", () => {
     expect(cfg.agent).toBe("claude");
     expect(cfg.image).toBe("docker/sandbox-templates:claude-code-docker");
     expect(cfg.sandboxName).toBe("project-claude");
+    expect(cfg.profile).toBeUndefined();
   });
 
   it("loads with komora.config.yaml", async () => {
