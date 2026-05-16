@@ -52,6 +52,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       env: ReturnType<typeof vi.fn>;
       volume: ReturnType<typeof vi.fn>;
       secret: ReturnType<typeof vi.fn>;
+      secretEnv: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
     };
     const builderSpy: BuilderSpy = {
@@ -77,6 +78,10 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
           return builderSpy;
         },
       ),
+      secretEnv: vi.fn((envVar: string, value: string, host: string) => {
+        calls.push({ method: "secretEnv", args: [envVar, value, host] });
+        return builderSpy;
+      }),
       create: vi.fn(async () => {
         calls.push({ method: "create", args: [] });
         return mockSandbox;
@@ -122,6 +127,7 @@ vi.mock("microsandbox", () => ({
   Sandbox: sandboxStatic,
   Volume: volumeStatic,
   VolumeAlreadyExistsError: class VolumeAlreadyExistsError extends Error {},
+  SandboxNotFoundError: class SandboxNotFoundError extends Error {},
 }));
 
 import { sdk } from "../../src/sandbox/_sdk.js";
@@ -134,6 +140,7 @@ beforeEach(() => {
     builderSpy.env,
     builderSpy.volume,
     builderSpy.secret,
+    builderSpy.secretEnv,
     builderSpy.create,
     mountBuilder.bind,
     mountBuilder.named,
@@ -194,10 +201,7 @@ describe("sdk.create", () => {
       'secret([])',
       'secret.env(["MSB_FOO"])',
       'secret.value(["bar"])',
-      'secret([])',
-      'secret.env(["MSB_BAZ"])',
-      'secret.value(["qux"])',
-      'secret.allowHost(["example.com"])',
+      'secretEnv(["MSB_BAZ","qux","example.com"])',
       'create([])',
     ]);
     expect(volumeStatic.builder).toHaveBeenCalledWith("v2");
@@ -285,12 +289,14 @@ describe("sdk.stop", () => {
   });
 
   it("is a no-op when sandbox is not found", async () => {
-    sandboxStatic.get.mockRejectedValueOnce(new Error("sandbox not found: ghost"));
+    const { SandboxNotFoundError } = await import("microsandbox");
+    sandboxStatic.get.mockRejectedValueOnce(new SandboxNotFoundError("sandbox not found: ghost"));
     await expect(sdk.stop("ghost")).resolves.toBeUndefined();
   });
 
-  it("treats a 'not found'-shaped error from handle.stop() as success (race window)", async () => {
-    liveHandle.stop.mockRejectedValueOnce(new Error("sandbox not found: a"));
+  it("treats SandboxNotFoundError from handle.stop() as success (race window)", async () => {
+    const { SandboxNotFoundError } = await import("microsandbox");
+    liveHandle.stop.mockRejectedValueOnce(new SandboxNotFoundError("sandbox not found: a"));
     await expect(sdk.stop("a")).resolves.toBeUndefined();
     expect(liveHandle.stop).toHaveBeenCalled();
   });
