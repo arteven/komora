@@ -15,17 +15,27 @@ export function getToolchainScriptPath(name: string): string {
   return path.join(__dirname, `${name}.sh`);
 }
 
-export async function runToolchains(
+export async function loadToolchainScripts(
+  toolchain: Record<string, string>[],
+): Promise<Record<string, string>> {
+  const scripts: Record<string, string> = {};
+  for (const entry of toolchain) {
+    const [name] = Object.entries(entry)[0];
+    const scriptPath = getToolchainScriptPath(name);
+    scripts[name] = await fs.readFile(scriptPath, "utf-8");
+  }
+  return scripts;
+}
+
+export async function runMountedToolchains(
   sandbox: Sandbox,
   toolchain: Record<string, string>[],
   verbose: boolean,
 ): Promise<void> {
   for (const entry of toolchain) {
     const [name, version] = Object.entries(entry)[0];
-    const scriptPath = getToolchainScriptPath(name);
-    const script = await fs.readFile(scriptPath, "utf-8");
     log.info(`toolchain: installing ${name}@${version}`);
-    const result = await sandbox.shell(`set -- '${version}'\n${script}`);
+    const result = await sandbox.shell(`/.msb/scripts/${name} '${version}'`);
     if (verbose) {
       const out = result.stdout();
       const err = result.stderr();

@@ -1,6 +1,9 @@
 import type { Sandbox } from "microsandbox";
 import { sdk } from "./_sdk.js";
+import type { VolumeInfo } from "./_sdk.js";
 import type { Mount } from "../config/types.js";
+
+export type { VolumeInfo };
 
 export type SandboxStatus = "running" | "stopped" | "missing";
 
@@ -14,6 +17,7 @@ export interface CreateInput {
   secretArgs: string[];
   domains: string[];
   raw: Record<string, unknown>;
+  scripts?: Record<string, string>;
 }
 
 export interface ListItem {
@@ -39,6 +43,12 @@ export const msb = {
   },
   async list(): Promise<ListItem[]> {
     return sdk.list();
+  },
+  async volumeList(): Promise<VolumeInfo[]> {
+    return sdk.volumeList();
+  },
+  async volumeRemove(name: string): Promise<void> {
+    return sdk.volumeRemove(name);
   },
   async status(name: string): Promise<SandboxStatus> {
     const items = await sdk.list();

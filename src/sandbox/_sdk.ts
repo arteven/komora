@@ -1,4 +1,4 @@
-import { Sandbox, Volume, VolumeAlreadyExistsError } from "microsandbox";
+import { Sandbox, Volume, VolumeAlreadyExistsError, SandboxNotFoundError } from "microsandbox";
 import type { SandboxStatus as SdkSandboxStatus } from "microsandbox";
 import type { Mount } from "../config/types.js";
 import { log } from "../util/log.js";
@@ -13,11 +13,16 @@ export interface SdkCreateInput {
   secretArgs: string[];
   domains: string[];
   raw: Record<string, unknown>;
+  scripts?: Record<string, string>;
 }
 
 export interface SdkListItem {
   name: string;
   status: "running" | "stopped";
+}
+
+export interface VolumeInfo {
+  name: string;
 }
 
 /** Env-var prefix used when materializing secrets into the SDK's secret
@@ -94,17 +99,6 @@ export function mapSdkStatus(status: SdkSandboxStatus): "running" | "stopped" {
 }
 
 /**
- * Heuristic check for "sandbox already gone" errors thrown by the SDK
- * during a stop race. The SDK has no typed error class we can rely on, so
- * we sniff the message. Used to keep `stop()` idempotent across the
- * list→stop window.
- */
-function isNotFoundError(e: unknown): boolean {
-  const msg = e instanceof Error ? e.message : String(e);
-  return /not\s*found|no such|does not exist/i.test(msg);
-}
-
-/**
  * The `raw` field is a passthrough escape hatch for `msb` flags the SDK does
  * not yet model. The SDK adapter has no `--flag` plumbing, so we warn and
  * ignore (matching the resolver's pattern for `network`/`digest`).
@@ -142,6 +136,12 @@ export const sdk = {
       builder = builder.env(k, v);
     }
 
+    if (input.scripts) {
+      for (const [name, content] of Object.entries(input.scripts)) {
+        builder = builder.script(name, content);
+      }
+    }
+
     for (const m of input.mounts) {
       if (m.type === "bind") {
         if (!m.source) {
@@ -169,15 +169,15 @@ export const sdk = {
 
     for (const s of parseSecretArgs(input.secretArgs)) {
       const envVar = secretEnvVarFor(s.name);
-      builder = builder.secret((b) => {
-        let sb = b.env(envVar).value(s.value);
-        if (s.host) sb = sb.allowHost(s.host);
-        return sb;
-      });
+      if (s.host) {
+        builder = builder.secretEnv(envVar, s.value, s.host);
+      } else {
+        builder = builder.secret((b) => b.env(envVar).value(s.value));
+      }
     }
 
     if (input.secretArgs.length > 0 && input.domains.length > 0) {
-      builder = builder.network((n: any) =>
+      builder = builder.network((n) =>
         n.tls((t: any) => {
           for (const d of input.domains) t = t.bypass(d);
           return t;
@@ -211,7 +211,7 @@ export const sdk = {
       const handle = await Sandbox.get(name);
       await handle.stop();
     } catch (e) {
-      if (isNotFoundError(e)) return;
+      if (e instanceof SandboxNotFoundError) return;
       throw e;
     }
   },
@@ -226,6 +226,15 @@ export const sdk = {
       name: h.name,
       status: mapSdkStatus(h.status),
     }));
+  },
+
+  async volumeList(): Promise<VolumeInfo[]> {
+    const handles = await Volume.list();
+    return handles.map((h) => ({ name: h.name }));
+  },
+
+  async volumeRemove(name: string): Promise<void> {
+    await Volume.remove(name);
   },
 
   async logs(_name: string, _onLine: (line: string) => void): Promise<void> {

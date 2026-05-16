@@ -31,7 +31,8 @@ vi.mock("../../src/secrets/store.js", () => ({
 }));
 
 vi.mock("../../src/toolchains/runner.js", () => ({
-  runToolchains: vi.fn().mockResolvedValue(undefined),
+  runMountedToolchains: vi.fn().mockResolvedValue(undefined),
+  loadToolchainScripts: vi.fn().mockResolvedValue({ node: "#!/bin/bash\nscript content" }),
 }));
 
 const agentDef: AgentDefinition = {
@@ -121,13 +122,13 @@ describe("ensureSandbox v2", () => {
 
   it("runs toolchains after creation", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
-    const { runToolchains } = await import("../../src/toolchains/runner.js");
+    const { runMountedToolchains } = await import("../../src/toolchains/runner.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
     vi.mocked(msb.create).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }));
 
-    expect(runToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], false);
+    expect(runMountedToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], false);
   });
 
   it("runs setup commands after toolchains", async () => {
@@ -155,13 +156,38 @@ describe("ensureSandbox v2", () => {
 
   it("passes verbose flag to init sequence", async () => {
     const { msb } = await import("../../src/sandbox/msb.js");
-    const { runToolchains } = await import("../../src/toolchains/runner.js");
+    const { runMountedToolchains } = await import("../../src/toolchains/runner.js");
     vi.mocked(msb.status).mockResolvedValue("missing");
     vi.mocked(msb.create).mockResolvedValue(mockSandbox);
 
     await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }), { verbose: true });
 
-    expect(runToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], true);
+    expect(runMountedToolchains).toHaveBeenCalledWith(mockSandbox, [{ node: "22" }], true);
+  });
+
+  it("loads toolchain scripts and passes them to create", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    const { loadToolchainScripts } = await import("../../src/toolchains/runner.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+    vi.mocked(loadToolchainScripts).mockResolvedValue({ node: "#!/bin/bash\nfnm install $1" });
+
+    await ensureSandbox(makeCfg({ toolchain: [{ node: "22" }] }));
+
+    expect(loadToolchainScripts).toHaveBeenCalledWith([{ node: "22" }]);
+    const createArg = vi.mocked(msb.create).mock.calls[0][0];
+    expect(createArg.scripts).toEqual({ node: "#!/bin/bash\nfnm install $1" });
+  });
+
+  it("does not pass scripts when no toolchains configured", async () => {
+    const { msb } = await import("../../src/sandbox/msb.js");
+    vi.mocked(msb.status).mockResolvedValue("missing");
+    vi.mocked(msb.create).mockResolvedValue(mockSandbox);
+
+    await ensureSandbox(makeCfg({ toolchain: [] }));
+
+    const createArg = vi.mocked(msb.create).mock.calls[0][0];
+    expect(createArg.scripts).toBeUndefined();
   });
 });
 

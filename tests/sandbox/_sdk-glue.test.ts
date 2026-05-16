@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, volumeHandle, mockSandbox } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
 
@@ -52,6 +52,8 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       env: ReturnType<typeof vi.fn>;
       volume: ReturnType<typeof vi.fn>;
       secret: ReturnType<typeof vi.fn>;
+      secretEnv: ReturnType<typeof vi.fn>;
+      script: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
     };
     const builderSpy: BuilderSpy = {
@@ -77,6 +79,14 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
           return builderSpy;
         },
       ),
+      secretEnv: vi.fn((envVar: string, value: string, host: string) => {
+        calls.push({ method: "secretEnv", args: [envVar, value, host] });
+        return builderSpy;
+      }),
+      script: vi.fn((name: string, content: string) => {
+        calls.push({ method: "script", args: [name, content] });
+        return builderSpy;
+      }),
       create: vi.fn(async () => {
         calls.push({ method: "create", args: [] });
         return mockSandbox;
@@ -111,17 +121,25 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       create: vi.fn(async () => ({})),
     };
 
-    const volumeStatic = {
-      builder: vi.fn((_name: string) => volumeBuilderSpy),
+    const volumeHandle = {
+      name: "test-vol",
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox };
+    const volumeStatic = {
+      builder: vi.fn((_name: string) => volumeBuilderSpy),
+      get: vi.fn(async (_name: string) => volumeHandle),
+      list: vi.fn(async () => [volumeHandle]),
+      remove: vi.fn(async (_name: string) => {}),
+    };
+
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, volumeHandle, mockSandbox };
   });
 
 vi.mock("microsandbox", () => ({
   Sandbox: sandboxStatic,
   Volume: volumeStatic,
   VolumeAlreadyExistsError: class VolumeAlreadyExistsError extends Error {},
+  SandboxNotFoundError: class SandboxNotFoundError extends Error {},
 }));
 
 import { sdk } from "../../src/sandbox/_sdk.js";
@@ -134,6 +152,8 @@ beforeEach(() => {
     builderSpy.env,
     builderSpy.volume,
     builderSpy.secret,
+    builderSpy.secretEnv,
+    builderSpy.script,
     builderSpy.create,
     mountBuilder.bind,
     mountBuilder.named,
@@ -148,6 +168,9 @@ beforeEach(() => {
     liveHandle.stop,
     liveHandle.connect,
     volumeStatic.builder,
+    volumeStatic.get,
+    volumeStatic.list,
+    volumeStatic.remove,
     volumeBuilderSpy.create,
     mockSandbox.exec,
     mockSandbox.shell,
@@ -194,10 +217,7 @@ describe("sdk.create", () => {
       'secret([])',
       'secret.env(["MSB_FOO"])',
       'secret.value(["bar"])',
-      'secret([])',
-      'secret.env(["MSB_BAZ"])',
-      'secret.value(["qux"])',
-      'secret.allowHost(["example.com"])',
+      'secretEnv(["MSB_BAZ","qux","example.com"])',
       'create([])',
     ]);
     expect(volumeStatic.builder).toHaveBeenCalledWith("v2");
@@ -228,6 +248,25 @@ describe("sdk.create", () => {
         raw: {},
       }),
     ).rejects.toThrow(/bind mount missing source/);
+  });
+
+  it("registers scripts on the builder when scripts field is provided", async () => {
+    await sdk.create({
+      name: "n",
+      image: "i",
+      mounts: [],
+      env: {},
+      secretArgs: [],
+      domains: [],
+      raw: {},
+      scripts: { "node": "#!/bin/bash\nfnm install $1", "bun": "#!/bin/bash\nbun install" },
+    });
+
+    const scriptCalls = calls.filter((c) => c.method === "script");
+    expect(scriptCalls).toEqual([
+      { method: "script", args: ["node", "#!/bin/bash\nfnm install $1"] },
+      { method: "script", args: ["bun", "#!/bin/bash\nbun install"] },
+    ]);
   });
 
   it("throws on a volume mount missing name", async () => {
@@ -285,12 +324,14 @@ describe("sdk.stop", () => {
   });
 
   it("is a no-op when sandbox is not found", async () => {
-    sandboxStatic.get.mockRejectedValueOnce(new Error("sandbox not found: ghost"));
+    const { SandboxNotFoundError } = await import("microsandbox");
+    sandboxStatic.get.mockRejectedValueOnce(new SandboxNotFoundError("sandbox not found: ghost"));
     await expect(sdk.stop("ghost")).resolves.toBeUndefined();
   });
 
-  it("treats a 'not found'-shaped error from handle.stop() as success (race window)", async () => {
-    liveHandle.stop.mockRejectedValueOnce(new Error("sandbox not found: a"));
+  it("treats SandboxNotFoundError from handle.stop() as success (race window)", async () => {
+    const { SandboxNotFoundError } = await import("microsandbox");
+    liveHandle.stop.mockRejectedValueOnce(new SandboxNotFoundError("sandbox not found: a"));
     await expect(sdk.stop("a")).resolves.toBeUndefined();
     expect(liveHandle.stop).toHaveBeenCalled();
   });
@@ -298,6 +339,21 @@ describe("sdk.stop", () => {
   it("rethrows other errors from handle.stop()", async () => {
     liveHandle.stop.mockRejectedValueOnce(new Error("kvm refused"));
     await expect(sdk.stop("a")).rejects.toThrow(/kvm refused/);
+  });
+});
+
+describe("sdk.volumeList", () => {
+  it("returns volume names and paths from Volume.list()", async () => {
+    const result = await sdk.volumeList();
+    expect(result).toEqual([{ name: "test-vol" }]);
+    expect(volumeStatic.list).toHaveBeenCalledOnce();
+  });
+});
+
+describe("sdk.volumeRemove", () => {
+  it("forwards to Volume.remove()", async () => {
+    await sdk.volumeRemove("test-vol");
+    expect(volumeStatic.remove).toHaveBeenCalledWith("test-vol");
   });
 });
 
