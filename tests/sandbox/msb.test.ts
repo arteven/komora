@@ -8,6 +8,8 @@ const { mockSdk } = vi.hoisted(() => ({
     stop: vi.fn(),
     rm: vi.fn(),
     list: vi.fn(),
+    volumeList: vi.fn(),
+    volumeRemove: vi.fn(),
   },
 }));
 vi.mock("../../src/sandbox/_sdk.js", () => ({ sdk: mockSdk }));
@@ -64,5 +66,17 @@ describe("msb adapter", () => {
     await msb[method]("box-1");
     expect(mockSdk[sdkMethod]).toHaveBeenCalledTimes(1);
     expect(mockSdk[sdkMethod]).toHaveBeenCalledWith("box-1");
+  });
+
+  it("volumeList() forwards to sdk.volumeList", async () => {
+    mockSdk.volumeList.mockResolvedValue([{ name: "v1" }]);
+    const result = await msb.volumeList();
+    expect(result).toEqual([{ name: "v1" }]);
+  });
+
+  it("volumeRemove() forwards name to sdk.volumeRemove", async () => {
+    mockSdk.volumeRemove.mockResolvedValue(undefined);
+    await msb.volumeRemove("vol-1");
+    expect(mockSdk.volumeRemove).toHaveBeenCalledWith("vol-1");
   });
 });

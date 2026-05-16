@@ -21,6 +21,10 @@ export interface SdkListItem {
   status: "running" | "stopped";
 }
 
+export interface VolumeInfo {
+  name: string;
+}
+
 /** Env-var prefix used when materializing secrets into the SDK's secret
  * builder. Matches microsandbox's documented `$MSB_<NAME>` placeholder. */
 const MSB_SECRET_ENV_PREFIX = "MSB_";
@@ -222,6 +226,15 @@ export const sdk = {
       name: h.name,
       status: mapSdkStatus(h.status),
     }));
+  },
+
+  async volumeList(): Promise<VolumeInfo[]> {
+    const handles = await Volume.list();
+    return handles.map((h) => ({ name: h.name }));
+  },
+
+  async volumeRemove(name: string): Promise<void> {
+    await Volume.remove(name);
   },
 
   async logs(_name: string, _onLine: (line: string) => void): Promise<void> {

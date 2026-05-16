@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Call = { method: string; args: unknown[] };
 
-const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox } =
+const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, volumeHandle, mockSandbox } =
   vi.hoisted(() => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
 
@@ -121,11 +121,18 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       create: vi.fn(async () => ({})),
     };
 
-    const volumeStatic = {
-      builder: vi.fn((_name: string) => volumeBuilderSpy),
+    const volumeHandle = {
+      name: "test-vol",
     };
 
-    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, mockSandbox };
+    const volumeStatic = {
+      builder: vi.fn((_name: string) => volumeBuilderSpy),
+      get: vi.fn(async (_name: string) => volumeHandle),
+      list: vi.fn(async () => [volumeHandle]),
+      remove: vi.fn(async (_name: string) => {}),
+    };
+
+    return { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandle, volumeStatic, volumeBuilderSpy, volumeHandle, mockSandbox };
   });
 
 vi.mock("microsandbox", () => ({
@@ -161,6 +168,9 @@ beforeEach(() => {
     liveHandle.stop,
     liveHandle.connect,
     volumeStatic.builder,
+    volumeStatic.get,
+    volumeStatic.list,
+    volumeStatic.remove,
     volumeBuilderSpy.create,
     mockSandbox.exec,
     mockSandbox.shell,
@@ -329,6 +339,21 @@ describe("sdk.stop", () => {
   it("rethrows other errors from handle.stop()", async () => {
     liveHandle.stop.mockRejectedValueOnce(new Error("kvm refused"));
     await expect(sdk.stop("a")).rejects.toThrow(/kvm refused/);
+  });
+});
+
+describe("sdk.volumeList", () => {
+  it("returns volume names and paths from Volume.list()", async () => {
+    const result = await sdk.volumeList();
+    expect(result).toEqual([{ name: "test-vol" }]);
+    expect(volumeStatic.list).toHaveBeenCalledOnce();
+  });
+});
+
+describe("sdk.volumeRemove", () => {
+  it("forwards to Volume.remove()", async () => {
+    await sdk.volumeRemove("test-vol");
+    expect(volumeStatic.remove).toHaveBeenCalledWith("test-vol");
   });
 });
 
