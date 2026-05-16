@@ -3,7 +3,7 @@ import { msb } from "./msb.js";
 import { withSandboxLock } from "./lock.js";
 import { getSecret } from "../secrets/store.js";
 import { buildSecretArgs } from "./_sdk.js";
-import { runToolchains } from "../toolchains/runner.js";
+import { loadToolchainScripts, runMountedToolchains } from "../toolchains/runner.js";
 import type { ResolvedConfig } from "../config/types.js";
 import { log } from "../util/log.js";
 
@@ -49,7 +49,7 @@ async function runInitSequence(sandbox: Sandbox, cfg: ResolvedConfig, verbose: b
 
   if (cfg.toolchain.length > 0) {
     log.info(`installing toolchains: ${cfg.toolchain.map((t) => Object.keys(t)[0]).join(", ")}`);
-    await runToolchains(sandbox, cfg.toolchain, verbose);
+    await runMountedToolchains(sandbox, cfg.toolchain, verbose);
   }
 
   for (const cmd of cfg.setup) {
@@ -68,6 +68,9 @@ export async function ensureSandbox(
     if (status === "missing") {
       const values = await collectSecretValues(cfg.secrets);
       const secretArgs = buildSecretArgs(values);
+      const scripts = cfg.toolchain.length > 0
+        ? await loadToolchainScripts(cfg.toolchain)
+        : undefined;
       const sandbox = await msb.create({
         name: cfg.sandboxName,
         image: cfg.image,
@@ -78,6 +81,7 @@ export async function ensureSandbox(
         secretArgs,
         domains: cfg.domains,
         raw: cfg.raw,
+        scripts,
       });
       await runInitSequence(sandbox, cfg, verbose);
       return sandbox;

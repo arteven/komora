@@ -14,6 +14,7 @@ export interface CreateInput {
   secretArgs: string[];
   domains: string[];
   raw: Record<string, unknown>;
+  scripts?: Record<string, string>;
 }
 
 export interface ListItem {

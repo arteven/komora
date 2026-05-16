@@ -13,6 +13,7 @@ export interface SdkCreateInput {
   secretArgs: string[];
   domains: string[];
   raw: Record<string, unknown>;
+  scripts?: Record<string, string>;
 }
 
 export interface SdkListItem {
@@ -129,6 +130,12 @@ export const sdk = {
 
     for (const [k, v] of Object.entries(input.env)) {
       builder = builder.env(k, v);
+    }
+
+    if (input.scripts) {
+      for (const [name, content] of Object.entries(input.scripts)) {
+        builder = builder.script(name, content);
+      }
     }
 
     for (const m of input.mounts) {

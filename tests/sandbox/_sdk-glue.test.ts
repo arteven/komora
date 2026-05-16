@@ -53,6 +53,7 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       volume: ReturnType<typeof vi.fn>;
       secret: ReturnType<typeof vi.fn>;
       secretEnv: ReturnType<typeof vi.fn>;
+      script: ReturnType<typeof vi.fn>;
       create: ReturnType<typeof vi.fn>;
     };
     const builderSpy: BuilderSpy = {
@@ -80,6 +81,10 @@ const { calls, builderSpy, mountBuilder, secretBuilder, sandboxStatic, liveHandl
       ),
       secretEnv: vi.fn((envVar: string, value: string, host: string) => {
         calls.push({ method: "secretEnv", args: [envVar, value, host] });
+        return builderSpy;
+      }),
+      script: vi.fn((name: string, content: string) => {
+        calls.push({ method: "script", args: [name, content] });
         return builderSpy;
       }),
       create: vi.fn(async () => {
@@ -141,6 +146,7 @@ beforeEach(() => {
     builderSpy.volume,
     builderSpy.secret,
     builderSpy.secretEnv,
+    builderSpy.script,
     builderSpy.create,
     mountBuilder.bind,
     mountBuilder.named,
@@ -232,6 +238,25 @@ describe("sdk.create", () => {
         raw: {},
       }),
     ).rejects.toThrow(/bind mount missing source/);
+  });
+
+  it("registers scripts on the builder when scripts field is provided", async () => {
+    await sdk.create({
+      name: "n",
+      image: "i",
+      mounts: [],
+      env: {},
+      secretArgs: [],
+      domains: [],
+      raw: {},
+      scripts: { "node": "#!/bin/bash\nfnm install $1", "bun": "#!/bin/bash\nbun install" },
+    });
+
+    const scriptCalls = calls.filter((c) => c.method === "script");
+    expect(scriptCalls).toEqual([
+      { method: "script", args: ["node", "#!/bin/bash\nfnm install $1"] },
+      { method: "script", args: ["bun", "#!/bin/bash\nbun install"] },
+    ]);
   });
 
   it("throws on a volume mount missing name", async () => {
