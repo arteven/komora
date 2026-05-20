@@ -1,0 +1,29 @@
+import { Sandbox } from "microsandbox";
+import { runMsb } from "./msb.js";
+import { composeRecipe } from "../../baker/recipe.js";
+import type { ResolvedBox } from "../types.js";
+import { log } from "../../util/log.js";
+
+const THROWAWAY = "komora-bake";
+
+export async function bake(r: ResolvedBox): Promise<void> {
+  log.info(`baking base image from ${r.image.base}`);
+
+  let builder: any = Sandbox.builder(THROWAWAY).image(r.image.base);
+  if (r.box.resources.memoryMib) builder = builder.memory(r.box.resources.memoryMib);
+  if (r.box.resources.cpus) builder = builder.cpus(r.box.resources.cpus);
+
+  const sandbox: any = await builder.create();
+  try {
+    const recipe = composeRecipe(r);
+    const res = await sandbox.shell(recipe);
+    if (!res.success) {
+      const err = res.stderr?.() ?? "";
+      throw new Error(`bake recipe failed (exit ${res.code}): ${err}`);
+    }
+    await sandbox.stop();
+    await runMsb(["snapshot", "create", r.baseSnapshotName, "--from", THROWAWAY], { stdio: "inherit" });
+  } finally {
+    await Sandbox.remove(THROWAWAY);
+  }
+}
