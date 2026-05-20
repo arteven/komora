@@ -24,6 +24,13 @@ export async function rebuild(r: ResolvedBox): Promise<void> {
   log.info(`creating ${r.box.name} from ${r.image.base}`);
   await buildSandbox(r, { secretArgs });
 
+  // Wait for the sandbox to reach running state (createDetached boots asynchronously)
+  for (let i = 0; i < 30; i++) {
+    const s = await boxStatus(r.box.name);
+    if (s === "running") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+
   if (r.box.ssh?.enabled) {
     const port = r.box.ports.find((p) => p.guest === 22)?.host;
     if (port) {

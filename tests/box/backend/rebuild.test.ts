@@ -51,19 +51,19 @@ describe("rebuild", () => {
   });
 
   it("skips destroy when VM missing", async () => {
-    statusMock.mockResolvedValue("missing");
+    statusMock.mockResolvedValueOnce("missing").mockResolvedValue("running");
     await rebuild(r);
     expect(destroyMock).not.toHaveBeenCalled();
   });
 
   it("waits for sshd when ssh.enabled", async () => {
-    statusMock.mockResolvedValue("missing");
+    statusMock.mockResolvedValueOnce("missing").mockResolvedValue("running");
     await rebuild(r);
     expect(sshProbeMock).toHaveBeenCalledWith(2222, expect.any(Number));
   });
 
   it("skips sshd wait when ssh disabled", async () => {
-    statusMock.mockResolvedValue("missing");
+    statusMock.mockResolvedValueOnce("missing").mockResolvedValue("running");
     await rebuild({ ...r, box: { ...r.box, ssh: null } });
     expect(sshProbeMock).not.toHaveBeenCalled();
   });
