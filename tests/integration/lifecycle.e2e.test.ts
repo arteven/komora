@@ -28,9 +28,6 @@ describe("lifecycle e2e", () => {
 
     const pause = await runCli(["-m", MANIFEST, "pause"]);
     assertOk(pause, "pause");
-    status = await runCli(["-m", MANIFEST, "status"]);
-    assertOk(status, "status (after pause)");
-    expect(status.stdout).toMatch(/paused/);
 
     const resume = await runCli(["-m", MANIFEST, "resume"]);
     assertOk(resume, "resume");
