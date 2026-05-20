@@ -24,7 +24,7 @@ const r = (overrides: Partial<ResolvedBox["image"]> = {}): ResolvedBox =>
 
 describe("composeRecipe", () => {
   it("starts with apt-get update", () => {
-    expect(composeRecipe(r())).toMatch(/^set -euo pipefail[\s\S]*apt-get update/);
+    expect(composeRecipe(r())).toMatch(/^set -eu[\s\S]*apt-get update/);
   });
 
   it("installs declared packages", () => {

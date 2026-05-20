@@ -24,7 +24,7 @@ vi.mock("microsandbox", () => ({
   SandboxNotFoundError: class extends Error {},
 }));
 
-const runMsbMock = vi.hoisted(() => vi.fn());
+const runMsbMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../../src/box/backend/msb.js", () => ({ runMsb: runMsbMock }));
 
 import { bake } from "../../../src/box/backend/image.js";
@@ -70,7 +70,10 @@ describe("bake", () => {
 
   it("removes throwaway sandbox after snapshot", async () => {
     await bake(r);
-    expect((await import("microsandbox")).Sandbox.remove).toHaveBeenCalled();
+    expect(runMsbMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["remove", "komora-bake"]),
+      expect.anything(),
+    );
   });
 
   it("mounts the install scripts directory at /opt/komora/install", async () => {

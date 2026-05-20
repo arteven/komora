@@ -36,12 +36,9 @@ export async function bake(r: ResolvedBox): Promise<void> {
     }
     await sandbox.stop();
     await runMsb(["snapshot", "create", r.baseSnapshotName, "--from", THROWAWAY], { stdio: "inherit" });
-    // snapshot create may restart the sandbox; kill it before removal
-    try {
-      const h = await Sandbox.get(THROWAWAY);
-      if ((h as any).status === "running") await (h as any).kill();
-    } catch { /* ignore */ }
   } finally {
-    await Sandbox.remove(THROWAWAY);
+    // Use msb CLI for stop+remove to avoid SDK race between stop and remove
+    await runMsb(["stop", THROWAWAY], { stdio: "pipe" }).catch(() => {});
+    await runMsb(["remove", THROWAWAY], { stdio: "pipe" }).catch(() => {});
   }
 }
