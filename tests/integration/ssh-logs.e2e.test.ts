@@ -3,7 +3,6 @@ import { runCli, assertOk, freshBox } from "./helpers.js";
 
 describe("ssh and logs e2e", () => {
   const manifest = process.env.KOMORA_E2E_SSH_MANIFEST;
-  const keyPath = process.env.KOMORA_E2E_SSH_KEY;
 
   beforeAll(async () => {
     if (!manifest) {
@@ -22,8 +21,8 @@ describe("ssh and logs e2e", () => {
     }
   });
 
-  it.skip("komora ssh -- echo ok returns 0 with 'ok' on stdout — TODO: sshCmd uses stdio:inherit, needs passthrough argv support before this can run non-interactively", async () => {
-    // sshCmd hard-codes stdio: "inherit" and has no passthrough argv.
+  it.skip("komora ssh -- echo ok returns 0 with 'ok' on stdout", async () => {
+    // TODO: sshCmd uses stdio:inherit and has no passthrough argv.
     // Wire this up once sshCmd accepts a cmd[] argument similar to attachCmd.
   });
 
