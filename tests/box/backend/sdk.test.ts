@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const calls: string[] = [];
-const builder = {
+const builder = vi.hoisted(() => ({
   image: vi.fn(() => builder),
   memory: vi.fn(() => builder),
   cpus: vi.fn(() => builder),
@@ -11,7 +10,7 @@ const builder = {
   secretEnv: vi.fn(() => builder),
   network: vi.fn(() => builder),
   create: vi.fn(async () => ({ name: "stub" })),
-};
+}));
 
 vi.mock("microsandbox", () => ({
   Sandbox: { builder: vi.fn(() => builder) },
@@ -22,7 +21,6 @@ vi.mock("microsandbox", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  calls.length = 0;
 });
 
 import { buildSandbox } from "../../../src/box/backend/sdk.js";

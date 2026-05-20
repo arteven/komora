@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const shell = vi.fn(async () => ({ success: true, code: 0, stdout: () => "", stderr: () => "" }));
-const create = vi.fn(async () => ({
-  shell,
-  stop: vi.fn(),
-  remove: vi.fn(),
-}));
-const builder = {
-  image: vi.fn(() => builder),
-  memory: vi.fn(() => builder),
-  cpus: vi.fn(() => builder),
-  volume: vi.fn(() => builder),
-  create,
-};
+const { shell, create, builder } = vi.hoisted(() => {
+  const shell = vi.fn(async () => ({ success: true, code: 0, stdout: () => "", stderr: () => "" }));
+  const create = vi.fn(async () => ({
+    shell,
+    stop: vi.fn(),
+    remove: vi.fn(),
+  }));
+  const builder = {
+    image: vi.fn(() => builder),
+    memory: vi.fn(() => builder),
+    cpus: vi.fn(() => builder),
+    volume: vi.fn(() => builder),
+    create,
+  };
+  return { shell, create, builder };
+});
 
 vi.mock("microsandbox", () => ({
   Sandbox: { builder: vi.fn(() => builder), remove: vi.fn(), get: vi.fn() },
