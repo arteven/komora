@@ -38,7 +38,7 @@ describe("box types", () => {
   });
 
   it("ResolvedBox resolves ~ in paths", () => {
-    expectTypeOf<ResolvedBox["mounts"][number]>().toMatchTypeOf<{ host: string; guest: string; readonly?: boolean }>();
+    expectTypeOf<ResolvedBox["box"]["mounts"][number]>().toMatchTypeOf<{ host: string; guest: string; readonly?: boolean }>();
   });
 
   it("PersonalLayer is volume OR mount, not both", () => {

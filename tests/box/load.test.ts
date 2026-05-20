@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadManifest } from "../../src/box/load.js";
