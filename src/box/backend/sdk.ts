@@ -28,7 +28,7 @@ async function ensureVolume(name: string): Promise<void> {
 }
 
 export async function buildSandbox(r: ResolvedBox, opts: BuildOpts): Promise<any> {
-  let b: any = Sandbox.builder(r.box.name).image(r.image.base);
+  let b: any = Sandbox.builder(r.box.name).image(r.image.base).init("/bin/sleep", ["infinity"]);
 
   if (r.box.resources.memoryMib) b = b.memory(r.box.resources.memoryMib);
   if (r.box.resources.cpus) b = b.cpus(r.box.resources.cpus);
@@ -55,5 +55,5 @@ export async function buildSandbox(r: ResolvedBox, opts: BuildOpts): Promise<any
     b = b.secretEnv(`MSB_${s.name}`, s.value, s.host);
   }
 
-  return b.create();
+  return b.createDetached();
 }

@@ -6,7 +6,9 @@ export interface AttachOpts { manifest?: string; }
 export async function attachCmd(opts: AttachOpts, cmd: string[] = []): Promise<void> {
   const b = await loadBox(opts.manifest);
   const interactive = cmd.length === 0;
-  const args = ["exec", "-t", b.box.name, ...(interactive ? ["bash"] : cmd)];
+  const args = interactive
+    ? ["exec", b.box.name, "--", "bash"]
+    : ["exec", b.box.name, "--", ...cmd];
   return new Promise((resolve, reject) => {
     const child = spawn("msb", args, {
       stdio: interactive ? "inherit" : "pipe",

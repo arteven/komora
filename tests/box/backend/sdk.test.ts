@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const builder = vi.hoisted(() => ({
   image: vi.fn(() => builder),
+  init: vi.fn(() => builder),
   memory: vi.fn(() => builder),
   cpus: vi.fn(() => builder),
   env: vi.fn(() => builder),
@@ -9,7 +10,7 @@ const builder = vi.hoisted(() => ({
   secret: vi.fn(() => builder),
   secretEnv: vi.fn(() => builder),
   network: vi.fn(() => builder),
-  create: vi.fn(async () => ({ name: "stub" })),
+  createDetached: vi.fn(async () => ({ name: "stub" })),
 }));
 
 vi.mock("microsandbox", () => ({

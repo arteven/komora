@@ -11,12 +11,12 @@ import { attachCmd } from "../../src/commands/attach.js";
 beforeEach(() => vi.clearAllMocks());
 
 describe("attach command", () => {
-  it("invokes msb exec -t with bash", async () => {
+  it("invokes msb exec with bash via -- separator", async () => {
     const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null });
     spawnMock.mockReturnValue(child);
     const p = attachCmd({});
     setImmediate(() => child.emit("exit", 0));
     await p;
-    expect(spawnMock).toHaveBeenCalledWith("msb", expect.arrayContaining(["exec", "-t", "komora-box", "bash"]), expect.anything());
+    expect(spawnMock).toHaveBeenCalledWith("msb", ["exec", "komora-box", "--", "bash"], expect.anything());
   });
 });
