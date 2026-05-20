@@ -35,7 +35,7 @@ export async function bake(r: ResolvedBox): Promise<void> {
       throw new Error(`bake recipe failed (exit ${res.code}): ${err}`);
     }
     await sandbox.stop();
-    await runMsb(["snapshot", "create", r.baseSnapshotName, "--from", THROWAWAY], { stdio: "inherit" });
+    await runMsb(["snapshot", "create", "--force", r.baseSnapshotName, "--from", THROWAWAY], { stdio: "inherit" });
   } finally {
     // Use msb CLI for stop+remove to avoid SDK race between stop and remove
     await runMsb(["stop", THROWAWAY], { stdio: "pipe" }).catch(() => {});
