@@ -48,6 +48,7 @@ See `docs/architecture.md` for the full developer-facing architecture reference.
 
 **Repo:** https://github.com/superradcompany/microsandbox
 **Docs:** https://docs.microsandbox.dev (check repo README if that URL changes)
+**LLMs version:** https://docs.microsandbox.dev/llms.txt
 
 microsandbox provides:
 - Persistent named microVMs (firecracker-based, fast boot)
