@@ -8,7 +8,7 @@
 ## What komora does
 
 `komora` is a TypeScript CLI that builds and manages one persistent personal dev
-microVM ("the box") via [microsandbox](https://github.com/microsandbox/microsandbox).
+microVM ("the box") via [microsandbox](https://github.com/superradcompany/microsandbox).
 It replaces a prior per-workspace ephemeral sandbox model.
 
 The box is a long-lived VM rooted in a baked base image. Toolchains, agents,

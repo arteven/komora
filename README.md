@@ -1,6 +1,6 @@
 # komora
 
-A personal dev VM orchestrator built on [microsandbox](https://github.com/microsandbox/microsandbox).
+A personal dev VM orchestrator built on [microsandbox](https://github.com/superradcompany/microsandbox).
 
 `komora` builds and manages **one persistent microVM** ("the box") that you live in instead of your host. The box has your toolchains, AI coding agents (claude, opencode, gemini, codex, copilot), tmux, shell, and editor pre-installed. You SSH into it like a remote machine, but it runs locally — and you can rebuild it from scratch with one command without losing anything you care about.
 
@@ -16,7 +16,7 @@ A personal dev VM orchestrator built on [microsandbox](https://github.com/micros
 npm install -g komora
 ```
 
-Requires Node ≥ 22 and a running [microsandbox](https://github.com/microsandbox/microsandbox) daemon (`msb` on PATH).
+Requires Node ≥ 22 and a running [microsandbox](https://github.com/superradcompany/microsandbox) daemon (`msb` on PATH).
 
 ## Quick start
 

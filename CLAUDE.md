@@ -46,7 +46,7 @@ See `docs/architecture.md` for the full developer-facing architecture reference.
 
 ## Background: why microsandbox
 
-**Repo:** https://github.com/microsandbox/microsandbox
+**Repo:** https://github.com/superradcompany/microsandbox
 **Docs:** https://docs.microsandbox.dev (check repo README if that URL changes)
 
 microsandbox provides:

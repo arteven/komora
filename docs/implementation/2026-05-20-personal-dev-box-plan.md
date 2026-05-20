@@ -3662,7 +3662,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```markdown
 # komora
 
-A personal dev VM orchestrator built on [microsandbox](https://github.com/microsandbox/microsandbox).
+A personal dev VM orchestrator built on [microsandbox](https://github.com/superradcompany/microsandbox).
 
 `komora` builds and manages **one persistent microVM** ("the box") that you live in instead of your host. The box has your toolchains, agents (claude, opencode, gemini, copilot, codex), tmux, shell, and editor pre-installed. You ssh into it like a remote machine, but it runs locally — and you can rebuild it from scratch with one command without losing anything you care about.
 
@@ -3678,7 +3678,7 @@ A personal dev VM orchestrator built on [microsandbox](https://github.com/micros
 npm install -g komora
 ```
 
-Requires Node ≥22 and a running [microsandbox](https://github.com/microsandbox/microsandbox) daemon.
+Requires Node ≥22 and a running [microsandbox](https://github.com/superradcompany/microsandbox) daemon.
 
 ## Quick start
 

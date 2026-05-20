@@ -5,7 +5,7 @@ This guide walks you through installing komora and starting your personal dev bo
 ## Prerequisites
 
 - Node.js >= 22
-- `msb` CLI on your PATH — install from [microsandbox](https://github.com/microsandbox/microsandbox)
+- `msb` CLI on your PATH — install from [microsandbox](https://github.com/superradcompany/microsandbox)
 - The microsandbox daemon running (see the microsandbox docs for `msd` setup)
 
 ## Installation
