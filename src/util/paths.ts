@@ -15,18 +15,18 @@ export function stateDir(): string {
   return path.join(base, "komora");
 }
 
+export function manifestFile(): string {
+  return path.join(configDir(), "box.yaml");
+}
+
 export function secretsFile(): string {
   return path.join(configDir(), "secrets.json");
 }
 
-export function userProfilesDir(): string {
-  return path.join(configDir(), "profiles");
+export function baseSnapshotName(): string {
+  return "komora-base";
 }
 
-export function userAgentsDir(): string {
-  return path.join(configDir(), "agents");
-}
-
-export function lockFile(sandboxName: string): string {
-  return path.join(stateDir(), "locks", `${sandboxName}.lock`);
+export function lockFile(name: string): string {
+  return path.join(stateDir(), "locks", `${name}.lock`);
 }
