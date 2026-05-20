@@ -1,0 +1,7 @@
+version: 1
+image:
+  base: debian:12-slim
+box:
+  name: komora-box
+  personalLayer:
+    volume: { name: personal-layer, mount: /home/komora/.local }
