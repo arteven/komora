@@ -55,3 +55,28 @@ export function withTmpHome(): TmpHome {
     cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
+
+export async function attachExec(
+  env: NodeJS.ProcessEnv,
+  manifest: string,
+  shellCmd: string,
+): Promise<string> {
+  const res = await runCli(["-m", manifest, "attach", "--", "sh", "-c", shellCmd], env);
+  assertOk(res, `attach -- sh -c "${shellCmd}"`);
+  return res.stdout;
+}
+
+export async function freshBox(
+  env: NodeJS.ProcessEnv,
+  manifest: string,
+): Promise<void> {
+  const destroy = await runCli(["-m", manifest, "destroy"], env);
+  // Tolerate "box not found" / similar idempotent failures; any other failure is fatal.
+  if (destroy.code !== 0 && !/not found|does not exist/i.test(destroy.stderr)) {
+    throw new Error(
+      `destroy failed unexpectedly (exit ${destroy.code})\nstderr: ${destroy.stderr}`,
+    );
+  }
+  const rebuild = await runCli(["-m", manifest, "rebuild"], env);
+  assertOk(rebuild, "rebuild");
+}
