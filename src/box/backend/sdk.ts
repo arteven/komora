@@ -1,5 +1,6 @@
-import { Sandbox, Volume, VolumeAlreadyExistsError } from "microsandbox";
+import { Volume, VolumeAlreadyExistsError } from "microsandbox";
 import type { ResolvedBox } from "../types.js";
+import { runMsb } from "./msb.js";
 
 export interface BuildOpts {
   secretArgs: string[];
@@ -27,33 +28,39 @@ async function ensureVolume(name: string): Promise<void> {
   }
 }
 
-export async function buildSandbox(r: ResolvedBox, opts: BuildOpts): Promise<any> {
-  let b: any = Sandbox.builder(r.box.name).image(r.image.base).init("/bin/sleep", ["infinity"]);
+export async function buildSandbox(r: ResolvedBox, opts: BuildOpts): Promise<void> {
+  const args: string[] = ["create", r.image.base, "--name", r.box.name];
 
-  if (r.box.resources.memoryMib) b = b.memory(r.box.resources.memoryMib);
-  if (r.box.resources.cpus) b = b.cpus(r.box.resources.cpus);
+  if (r.box.resources.memoryMib) args.push("-m", `${r.box.resources.memoryMib}M`);
+  if (r.box.resources.cpus) args.push("-c", String(r.box.resources.cpus));
+
+  args.push("--init", "/bin/sleep", "--init-arg", "infinity");
 
   if ("volume" in r.box.personalLayer && r.box.personalLayer.volume) {
     const v = r.box.personalLayer.volume;
     await ensureVolume(v.name);
-    b = b.volume(v.mount, (vb: any) => vb.named(v.name));
+    args.push("-v", `${v.name}:${v.mount}`);
   } else if ("mount" in r.box.personalLayer && r.box.personalLayer.mount) {
     const m = r.box.personalLayer.mount;
-    b = b.volume(m.guest, (vb: any) => vb.bind(m.host));
+    args.push("-v", `${m.host}:${m.guest}`);
   }
 
   for (const v of r.box.volumes) {
     await ensureVolume(v.name);
-    b = b.volume(v.mount, (vb: any) => vb.named(v.name));
+    args.push("-v", `${v.name}:${v.mount}`);
   }
 
   for (const m of r.box.mounts) {
-    b = b.volume(m.guest, (vb: any) => vb.bind(m.host));
+    args.push("-v", `${m.host}:${m.guest}`);
+  }
+
+  for (const p of r.box.ports) {
+    args.push("-p", `${p.host}:${p.guest}`);
   }
 
   for (const s of parseSecret(opts.secretArgs)) {
-    b = b.secretEnv(`MSB_${s.name}`, s.value, s.host);
+    args.push("--secret", `${s.name}=${s.value}@${s.host}`);
   }
 
-  return b.createDetached();
+  await runMsb(args, { stdio: "pipe" });
 }

@@ -11,7 +11,7 @@ export async function attachCmd(opts: AttachOpts, cmd: string[] = []): Promise<v
     : ["exec", b.box.name, "--", ...cmd];
   return new Promise((resolve, reject) => {
     const child = spawn("msb", args, {
-      stdio: interactive ? "inherit" : "pipe",
+      stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
       env: process.env,
     });
     if (!interactive) {

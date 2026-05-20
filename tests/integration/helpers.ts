@@ -37,7 +37,7 @@ export function assertOk(result: CliResult, label: string): void {
 
 export interface TmpHome {
   dir: string;
-  env: { HOME: string; XDG_CONFIG_HOME: string; XDG_STATE_HOME: string };
+  env: { XDG_CONFIG_HOME: string; XDG_STATE_HOME: string };
   cleanup: () => void;
 }
 
@@ -47,8 +47,9 @@ export function withTmpHome(): TmpHome {
   fs.mkdirSync(path.join(dir, ".local", "state", "komora"), { recursive: true });
   return {
     dir,
+    // Do NOT override HOME — msb CLI uses HOME to find its db (~/.microsandbox).
+    // Komora uses XDG dirs for its own config, so HOME doesn't need to change.
     env: {
-      HOME: dir,
       XDG_CONFIG_HOME: path.join(dir, ".config"),
       XDG_STATE_HOME: path.join(dir, ".local", "state"),
     },

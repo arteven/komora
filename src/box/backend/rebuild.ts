@@ -24,7 +24,7 @@ export async function rebuild(r: ResolvedBox): Promise<void> {
   log.info(`creating ${r.box.name} from ${r.image.base}`);
   await buildSandbox(r, { secretArgs });
 
-  // Wait for the sandbox to reach running state (createDetached boots asynchronously)
+  // Wait for the sandbox to reach running state (msb create boots asynchronously)
   for (let i = 0; i < 30; i++) {
     const s = await boxStatus(r.box.name);
     if (s === "running") break;
