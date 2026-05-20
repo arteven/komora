@@ -1,0 +1,16 @@
+version: 1
+image:
+  base: docker.io/library/debian:12-slim
+  packages: [tmux]
+box:
+  name: komora-e2e
+  resources: { memoryMib: 1024, cpus: 1 }
+  personalLayer:
+    volume: { name: komora-e2e-pl, mount: /home/komora/.local }
+  ports:
+    - { host: 32222, guest: 22 }
+  ssh:
+    enabled: false
+    user: komora
+    authorizedKeysFromHost: /dev/null
+  identity: { forwardSshAgent: false }

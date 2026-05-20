@@ -1,38 +1,44 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import path from "node:path";
-import { configDir, stateDir, secretsFile, lockFile, userProfilesDir } from "../../src/util/paths.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import { configDir, stateDir, manifestFile, baseSnapshotName, lockFile, secretsFile } from "../../src/util/paths.js";
 
 describe("paths", () => {
-  const originalEnv = { ...process.env };
-  beforeEach(() => { process.env = { ...originalEnv }; });
-  afterEach(() => { process.env = originalEnv; });
-
-  it("uses XDG_CONFIG_HOME when set", () => {
-    process.env.XDG_CONFIG_HOME = "/tmp/xdg-config";
-    expect(configDir()).toBe("/tmp/xdg-config/komora");
-    expect(secretsFile()).toBe("/tmp/xdg-config/komora/secrets.json");
-    expect(userProfilesDir()).toBe("/tmp/xdg-config/komora/profiles");
-  });
-
-  it("falls back to $HOME/.config when XDG unset", () => {
+  beforeEach(() => {
     delete process.env.XDG_CONFIG_HOME;
-    process.env.HOME = "/home/u";
-    expect(configDir()).toBe("/home/u/.config/komora");
-  });
-
-  it("uses XDG_STATE_HOME when set", () => {
-    process.env.XDG_STATE_HOME = "/tmp/xdg-state";
-    expect(stateDir()).toBe("/tmp/xdg-state/komora");
-  });
-
-  it("falls back to $HOME/.local/state when XDG_STATE_HOME unset", () => {
     delete process.env.XDG_STATE_HOME;
-    process.env.HOME = "/home/u";
-    expect(stateDir()).toBe("/home/u/.local/state/komora");
+    process.env.HOME = "/tmp/fake-home";
   });
 
-  it("builds lock file paths under stateDir/locks/", () => {
-    process.env.XDG_STATE_HOME = "/tmp/xdg-state";
-    expect(lockFile("foo-claude-nodejs")).toBe(path.join("/tmp/xdg-state/komora/locks", "foo-claude-nodejs.lock"));
+  it("configDir defaults to ~/.config/komora", () => {
+    expect(configDir()).toBe("/tmp/fake-home/.config/komora");
+  });
+
+  it("manifestFile is configDir + box.yaml", () => {
+    expect(manifestFile()).toBe("/tmp/fake-home/.config/komora/box.yaml");
+  });
+
+  it("baseSnapshotName is komora-base", () => {
+    expect(baseSnapshotName()).toBe("komora-base");
+  });
+
+  it("lockFile composes stateDir + name", () => {
+    expect(lockFile("foo")).toBe("/tmp/fake-home/.local/state/komora/locks/foo.lock");
+  });
+
+  it("XDG_CONFIG_HOME overrides", () => {
+    process.env.XDG_CONFIG_HOME = "/custom";
+    expect(configDir()).toBe("/custom/komora");
+  });
+
+  it("stateDir defaults to ~/.local/state/komora", () => {
+    expect(stateDir()).toBe("/tmp/fake-home/.local/state/komora");
+  });
+
+  it("secretsFile is configDir + secrets.json", () => {
+    expect(secretsFile()).toBe("/tmp/fake-home/.config/komora/secrets.json");
+  });
+
+  it("XDG_STATE_HOME overrides", () => {
+    process.env.XDG_STATE_HOME = "/custom-state";
+    expect(stateDir()).toBe("/custom-state/komora");
   });
 });

@@ -1,23 +1,21 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../src/sandbox/_sdk.js", () => ({
-  sdk: {
-    logs: vi.fn((_n: string, onLine: (l: string) => void) => {
-      onLine("line one");
-      onLine("line two");
-      return Promise.resolve();
-    }),
-  },
-}));
+const runMsbMock = vi.hoisted(() => vi.fn());
+vi.mock("../../src/box/backend/msb.js", () => ({ runMsb: runMsbMock }));
+const loadBoxMock = vi.hoisted(() => vi.fn(async () => ({ box: { name: "komora-box" } })));
+vi.mock("../../src/box/index.js", () => ({ loadBox: loadBoxMock }));
 
-import { logs } from "../../src/commands/logs.js";
+import { logsCmd } from "../../src/commands/logs.js";
+
+beforeEach(() => vi.clearAllMocks());
 
 describe("logs command", () => {
-  it("forwards each line to stderr", async () => {
-    const w = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    await logs("foo");
-    expect(w).toHaveBeenCalledWith("line one\n");
-    expect(w).toHaveBeenCalledWith("line two\n");
-    w.mockRestore();
+  it("invokes msb logs with the box name", async () => {
+    await logsCmd({});
+    expect(runMsbMock).toHaveBeenCalledWith(expect.arrayContaining(["logs", "komora-box"]), expect.anything());
+  });
+  it("appends --follow when -f is passed", async () => {
+    await logsCmd({ follow: true });
+    expect(runMsbMock).toHaveBeenCalledWith(expect.arrayContaining(["logs", "komora-box", "--follow"]), expect.anything());
   });
 });

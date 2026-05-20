@@ -2,30 +2,27 @@
 
 ## Project
 
-`komora` is a TypeScript CLI that runs AI coding agents (claude, opencode, gemini, etc.) in isolated microsandbox microVMs. One sandbox per workspace per agent.
+`komora` is a TypeScript CLI that builds and manages a single persistent personal dev microVM ("the box") via microsandbox. Replaces the prior per-workspace ephemeral sandbox model.
 
 **Branch model:** `master` is stable. Feature work on branches. Preserve `archive/komora-research`.
 
 ## Architecture
 
-- `src/agents/` — one file per agent; each exports `AgentDefinition` (template, volumes, secrets, domains)
-- `src/config/` — types, schema (AJV), YAML load, resolve pipeline, index entry point
-- `src/sandbox/` — microsandbox SDK lifecycle, naming, locking
-- `src/commands/` — run, create, start, stop, rm, ls, exec, logs, secrets
-- `src/toolchains/` — shell scripts installed at sandbox creation (node, bun, python, go, rust, dotnet)
+- `src/box/` — manifest types, schema, loader, resolver
+- `src/box/backend/` — msb/SDK wrappers, lifecycle, image bake, rebuild, ssh probe, status
+- `src/baker/` — base image recipe + install fragments
+- `src/secrets/` — file-backed keychain, tiered classification, workload injection
+- `src/commands/` — bake, rebuild, up, down, pause, resume, destroy, ssh, attach, status, logs, secret
+- `src/util/` — paths, log
 
-See `docs/architecture.md` for full design reference.
+See `docs/design/2026-05-19-personal-dev-box-design.md` for the full design.
 
-## Current state (as of 2026-05-09)
+## Current state (as of 2026-05-20)
 
-All v2 features implemented on `feat/v2-implementation`:
-- Agent registry with 5 built-in agents (claude, opencode, gemini, copilot, codex) + shell
-- `komora.config.yaml` support (toolchain, setup, env, mounts, secrets, network, raw, profile)
-- Credential profiles: `--profile <name>` isolates auth volumes + sandbox names
-- Volume naming: `*-home` (e.g., `claude-home`, `claude-dotfile` for onboarding state)
-- Profile validation: lowercase alphanumeric with hyphens
-
-**Breaking volume rename:** existing `claude-auth` → `claude-home` (manual rename needed on existing installs).
+Branch `feat/personal-dev-box`: complete rewrite around the personal-dev-box model.
+- Manifest: `~/.config/komora/box.yaml` (single source of truth)
+- Backend: microsandbox SDK + `msb` CLI (snapshot, exec, logs)
+- Tiered secrets: workload via `secretEnv`, identity via `SSH_AUTH_SOCK` forwarding
 
 ## Workflow rules
 
@@ -34,6 +31,11 @@ All v2 features implemented on `feat/v2-implementation`:
 - Verify claims against code before stating as facts.
 - Prefer minimal changes.
 - If git push fails, stop and report.
+
+## Doc locations
+
+- Design specs: `docs/design/YYYY-MM-DD-<topic>-design.md`
+- Implementation plans: `docs/implementation/YYYY-MM-DD-<topic>-plan.md`
 
 ## Known followups
 
