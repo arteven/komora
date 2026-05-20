@@ -35,6 +35,11 @@ All v2 features implemented on `feat/v2-implementation`:
 - Prefer minimal changes.
 - If git push fails, stop and report.
 
+## Doc locations
+
+- Design specs: `docs/design/YYYY-MM-DD-<topic>-design.md`
+- Implementation plans: `docs/implementation/YYYY-MM-DD-<topic>-plan.md`
+
 ## Known followups
 
 - `komora profile list/delete` commands (not yet implemented)
