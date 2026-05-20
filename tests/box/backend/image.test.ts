@@ -72,4 +72,10 @@ describe("bake", () => {
     await bake(r);
     expect((await import("microsandbox")).Sandbox.remove).toHaveBeenCalled();
   });
+
+  it("mounts the install scripts directory at /opt/komora/install", async () => {
+    await bake(r);
+    const calls = (builder.volume.mock.calls as any[]).map((c) => c[0]);
+    expect(calls).toContain("/opt/komora/install");
+  });
 });
