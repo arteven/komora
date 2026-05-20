@@ -1,23 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const builder = vi.hoisted(() => ({
-  image: vi.fn(() => builder),
-  init: vi.fn(() => builder),
-  memory: vi.fn(() => builder),
-  cpus: vi.fn(() => builder),
-  env: vi.fn(() => builder),
-  volume: vi.fn(() => builder),
-  secret: vi.fn(() => builder),
-  secretEnv: vi.fn(() => builder),
-  network: vi.fn(() => builder),
-  createDetached: vi.fn(async () => ({ name: "stub" })),
+// Mock runMsb to capture the CLI args passed to `msb create`
+vi.mock("../../../src/box/backend/msb.js", () => ({
+  runMsb: vi.fn(async () => {}),
 }));
 
+// Volume.builder is still used for ensureVolume
 vi.mock("microsandbox", () => ({
-  Sandbox: { builder: vi.fn(() => builder) },
   Volume: { builder: vi.fn(() => ({ create: vi.fn() })) },
   VolumeAlreadyExistsError: class extends Error {},
-  SandboxNotFoundError: class extends Error {},
 }));
 
 beforeEach(() => {
@@ -25,6 +16,7 @@ beforeEach(() => {
 });
 
 import { buildSandbox } from "../../../src/box/backend/sdk.js";
+import { runMsb } from "../../../src/box/backend/msb.js";
 import type { ResolvedBox } from "../../../src/box/types.js";
 
 const baseResolved: ResolvedBox = {
@@ -47,20 +39,27 @@ const baseResolved: ResolvedBox = {
 };
 
 describe("buildSandbox", () => {
-  it("applies image, memory, cpus", async () => {
+  it("passes image, memory, cpus to msb create", async () => {
     await buildSandbox(baseResolved, { secretArgs: [] });
-    expect(builder.image).toHaveBeenCalledWith("snap:komora-base");
-    expect(builder.memory).toHaveBeenCalledWith(4096);
-    expect(builder.cpus).toHaveBeenCalledWith(2);
+    const [args] = vi.mocked(runMsb).mock.calls[0];
+    expect(args).toContain("snap:komora-base");
+    expect(args).toContain("-m");
+    expect(args).toContain("4096M");
+    expect(args).toContain("-c");
+    expect(args).toContain("2");
   });
 
   it("mounts the personal layer (volume form)", async () => {
     await buildSandbox(baseResolved, { secretArgs: [] });
-    expect(builder.volume).toHaveBeenCalled();
+    const [args] = vi.mocked(runMsb).mock.calls[0];
+    expect(args).toContain("-v");
+    expect(args.join(" ")).toContain("pl:/home/k/.local");
   });
 
-  it("converts secretEnv args into builder.secretEnv calls", async () => {
+  it("converts secretEnv args into --secret CLI flags", async () => {
     await buildSandbox(baseResolved, { secretArgs: ["--secret", "FOO=bar@api.foo.com"] });
-    expect(builder.secretEnv).toHaveBeenCalledWith("MSB_FOO", "bar", "api.foo.com");
+    const [args] = vi.mocked(runMsb).mock.calls[0];
+    expect(args).toContain("--secret");
+    expect(args).toContain("FOO=bar@api.foo.com");
   });
 });

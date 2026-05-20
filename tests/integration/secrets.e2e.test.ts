@@ -44,9 +44,11 @@ describe("secrets injection e2e", () => {
     home.cleanup();
   });
 
-  it("secret set → rebuild → workload env contains the secret", async () => {
+  it("secret set → rebuild → workload env contains the secret placeholder", async () => {
     const out = await attachExec(home.env, manifestPath, "env");
-    expect(out).toMatch(/^MSB_TESTKEY=value123$/m);
+    // Secrets use placeholder-based injection: guest sees TESTKEY=$MSB_TESTKEY,
+    // real value is only substituted by the TLS proxy on requests to test.local.
+    expect(out).toMatch(/^TESTKEY=\$MSB_TESTKEY$/m);
   });
 
   it("secret rm removes the secret from the keychain", async () => {

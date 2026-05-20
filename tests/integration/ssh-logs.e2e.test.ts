@@ -27,6 +27,8 @@ describe("ssh and logs e2e", () => {
   });
 
   it("komora logs returns non-empty output", async () => {
+    // Run a command first so the sandbox has something in its exec log.
+    await runCli(["-m", manifest!, "attach", "--", "sh", "-c", "echo komora-log-test"], process.env);
     const res = await runCli(["-m", manifest!, "logs"]);
     assertOk(res, "logs");
     expect(res.stdout.length + res.stderr.length).toBeGreaterThan(0);
