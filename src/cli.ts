@@ -29,7 +29,7 @@ program.command("pause").description("Pause the VM.").action(() => pauseCmd(opts
 program.command("resume").description("Resume a paused VM.").action(() => resumeCmd(opts()));
 program.command("destroy").description("Remove the VM (volumes preserved).").action(() => destroyCmd(opts()));
 program.command("ssh").description("Connect to the VM via sshd.").action(() => sshCmd(opts()));
-program.command("attach").description("Attach via 'msb exec -t bash' (fallback when sshd is down).").action(() => attachCmd(opts()));
+program.command("attach").description("Attach via 'msb exec -t bash' (fallback when sshd is down).").argument("[cmd...]").action((cmd: string[]) => attachCmd(opts(), cmd));
 program.command("status").description("Show VM state, sshd readiness, attached volumes.").action(() => statusCmd(opts()));
 program.command("logs").option("-f, --follow", "Stream new lines").description("Tail VM logs.").action((o) => logsCmd({ ...opts(), follow: !!o.follow }));
 

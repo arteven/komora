@@ -1,9 +1,25 @@
+import { spawn } from "node:child_process";
 import { loadBox } from "../box/index.js";
-import { runMsb } from "../box/backend/msb.js";
 
 export interface AttachOpts { manifest?: string; }
 
-export async function attachCmd(opts: AttachOpts): Promise<void> {
+export async function attachCmd(opts: AttachOpts, cmd: string[] = []): Promise<void> {
   const b = await loadBox(opts.manifest);
-  await runMsb(["exec", "-t", b.box.name, "bash"], { stdio: "inherit" });
+  const interactive = cmd.length === 0;
+  const args = ["exec", "-t", b.box.name, ...(interactive ? ["bash"] : cmd)];
+  return new Promise((resolve, reject) => {
+    const child = spawn("msb", args, {
+      stdio: interactive ? "inherit" : "pipe",
+      env: process.env,
+    });
+    if (!interactive) {
+      child.stdout!.pipe(process.stdout);
+      child.stderr!.pipe(process.stderr);
+    }
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`msb exited with code ${code}`));
+    });
+    child.on("error", reject);
+  });
 }
