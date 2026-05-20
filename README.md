@@ -1,70 +1,58 @@
 # komora
 
-Per-workspace microVM sandboxes for AI coding agents — `claude`, `opencode`, anything else with a CLI.
+A personal dev VM orchestrator built on [microsandbox](https://github.com/microsandbox/microsandbox).
 
-## Quick Start
+`komora` builds and manages **one persistent microVM** ("the box") that you live in instead of your host. The box has your toolchains, agents (claude, opencode, gemini, copilot, codex), tmux, shell, and editor pre-installed. You ssh into it like a remote machine, but it runs locally — and you can rebuild it from scratch with one command without losing anything you care about.
+
+## Why
+
+- **Isolate AI coding agents.** Agents can install, modify, and run code freely inside the box without touching your host filesystem, your SSH keys, or your cloud credentials.
+- **Tiered secrets.** Workload secrets (API keys) are injected via microsandbox `secretEnv` — the real value is materialized only for outbound requests to a specific declared domain. Identity secrets (your SSH key) never enter the box; instead, your `SSH_AUTH_SOCK` is forwarded.
+- **Reproducible by design.** Anything not on a declared volume or bind-mount is lost on rebuild. That discipline keeps the box honest.
+
+## Install
 
 ```bash
-# Zero-config: boot an agent in an isolated sandbox
-komora run claude
-
-# With a project config
-# Create komora.config.yaml:
-# toolchain:
-#   - node: "22"
-# secrets:
-#   - GITHUB_TOKEN
-komora run claude
-
-# Other agents
-komora run opencode
-komora run shell
-
-# Manage secrets
-komora secrets set ANTHROPIC_API_KEY
-komora secrets set GITHUB_TOKEN
-
-# Lifecycle
-komora ls
-komora stop komora-claude
-komora start komora-claude
-komora rm komora-claude
-
-# Preview resolved config
-komora run claude --dry-run
-
-# Strip agent defaults (ephemeral, no auth persistence)
-komora run claude --bare
-
-# Credential profiles (isolate auth volumes per account)
-komora run claude --profile work
-komora run claude --profile personal
+npm install -g komora
 ```
 
-## Editor IntelliSense
+Requires Node ≥22 and a running [microsandbox](https://github.com/microsandbox/microsandbox) daemon.
 
-Add this header to `komora.config.yaml`:
+## Quick start
 
-```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/arteven/komora/refs/heads/master/schema/komora.config.v2.json
-```
+1. Write `~/.config/komora/box.yaml` (see `docs/design/2026-05-19-personal-dev-box-design.md` for the full schema).
+2. Bake the base image (one time, slow):
+   ```bash
+   komora bake
+   ```
+3. Rebuild the VM (fast):
+   ```bash
+   komora rebuild
+   ```
+4. Connect:
+   ```bash
+   komora ssh
+   ```
 
 ## Commands
 
-| | |
+| Command | What it does |
 |---|---|
-| `komora run <agent> [-- <args>]` | Find-or-create the sandbox and run the agent. |
-| `komora run <agent> --dry-run` | Print resolved config without creating anything. |
-| `komora run <agent> --bare` | Strip agent defaults (auth, secrets, domains). |
-| `komora run <agent> --profile <name>` | Isolate credentials to a named profile. |
-| `komora create <agent>` | Create a sandbox without running an agent. |
-| `komora create <agent> --profile <name>` | Create sandbox with credential profile. |
-| `komora start <name>` | Start a stopped sandbox. |
-| `komora exec <name> <cmd>` | Run a one-off command. Errors if not running. |
-| `komora stop <name>` | Stop a running sandbox. |
-| `komora rm <name>` | Remove a sandbox (auto-stops first). |
-| `komora ls` | List sandboxes. |
-| `komora logs <name>` | Stream the agent's stderr. |
-| `komora secrets {set,list,rm}` | Manage stored secrets. |
+| `komora bake` | Build/refresh the base image snapshot |
+| `komora rebuild` | Recreate the VM from the base snapshot + manifest |
+| `komora up` / `down` | Start / stop the VM |
+| `komora pause` / `resume` | Pause / resume |
+| `komora destroy` | Remove the VM (volumes preserved) |
+| `komora ssh` | Connect via sshd |
+| `komora attach` | Fallback: `msb exec -t bash` |
+| `komora status` | Show VM state, sshd readiness |
+| `komora logs` | Tail VM logs |
+| `komora secret set/list/rm` | Manage host-side secrets |
 
-See `docs/architecture.md` for full technical documentation.
+## Architecture
+
+See `docs/design/2026-05-19-personal-dev-box-design.md`.
+
+## License
+
+MIT
