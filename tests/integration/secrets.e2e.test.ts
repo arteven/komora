@@ -23,10 +23,7 @@ describe("secrets injection e2e", () => {
       "utf8",
     );
     // Inject a workload secret. The keychain lives under tmp HOME so it can't collide with the user's real config.
-    const withSecret = base.replace(
-      "identity: { forwardSshAgent: false }",
-      `identity: { forwardSshAgent: false }\n  secretEnv:\n    - { name: TESTKEY, domain: workload }`,
-    );
+    const withSecret = `${base.trimEnd()}\nsecrets:\n  workload:\n    - { name: TESTKEY, domain: test.local }\n`;
     fs.writeFileSync(manifestPath, withSecret, "utf8");
 
     const setRes = await runCli(
@@ -49,7 +46,7 @@ describe("secrets injection e2e", () => {
 
   it("secret set → rebuild → workload env contains the secret", async () => {
     const out = await attachExec(home.env, manifestPath, "env");
-    expect(out).toMatch(/^TESTKEY=value123$/m);
+    expect(out).toMatch(/^MSB_TESTKEY=value123$/m);
   });
 
   it("secret rm removes the secret from the keychain", async () => {
