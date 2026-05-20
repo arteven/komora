@@ -30,3 +30,7 @@ export function baseSnapshotName(): string {
 export function lockFile(name: string): string {
   return path.join(stateDir(), "locks", `${name}.lock`);
 }
+
+export function boxStateFile(name: string): string {
+  return path.join(stateDir(), `${name}.state`);
+}
