@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface CliResult {
@@ -31,4 +33,25 @@ export function assertOk(result: CliResult, label: string): void {
       `${label} failed (exit ${result.code})\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
     );
   }
+}
+
+export interface TmpHome {
+  dir: string;
+  env: { HOME: string; XDG_CONFIG_HOME: string; XDG_STATE_HOME: string };
+  cleanup: () => void;
+}
+
+export function withTmpHome(): TmpHome {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "komora-e2e-HOME-"));
+  fs.mkdirSync(path.join(dir, ".config", "komora"), { recursive: true });
+  fs.mkdirSync(path.join(dir, ".local", "state", "komora"), { recursive: true });
+  return {
+    dir,
+    env: {
+      HOME: dir,
+      XDG_CONFIG_HOME: path.join(dir, ".config"),
+      XDG_STATE_HOME: path.join(dir, ".local", "state"),
+    },
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
 }
