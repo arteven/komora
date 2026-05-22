@@ -3,7 +3,7 @@ import { toolchainScript } from "./toolchains.js";
 import { agentScript } from "./agents.js";
 
 export function composeRecipe(r: ResolvedBox): string {
-  const lines: string[] = ["set -eu", "apt-get update"];
+  const lines: string[] = ["set -eu", "export HOME=/root", "apt-get update"];
 
   const corePkgs = ["ca-certificates", "curl", "gnupg", "git", "build-essential"];
   lines.push(`apt-get install -y ${corePkgs.join(" ")}`);

@@ -39,10 +39,13 @@ const baseResolved: ResolvedBox = {
 };
 
 describe("buildSandbox", () => {
-  it("passes image, memory, cpus to msb create", async () => {
+  it("uses msb run --snapshot with the base snapshot name", async () => {
     await buildSandbox(baseResolved, { secretArgs: [] });
     const [args] = vi.mocked(runMsb).mock.calls[0];
-    expect(args).toContain("snap:komora-base");
+    expect(args).toContain("run");
+    expect(args).toContain("--snapshot");
+    expect(args).toContain("komora-base");
+    expect(args).toContain("--detach");
     expect(args).toContain("-m");
     expect(args).toContain("4096M");
     expect(args).toContain("-c");
