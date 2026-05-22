@@ -7,7 +7,7 @@ export async function attachCmd(opts: AttachOpts, cmd: string[] = []): Promise<v
   const b = await loadBox(opts.manifest);
   const interactive = cmd.length === 0;
   const args = interactive
-    ? ["exec", b.box.name, "--", "bash"]
+    ? ["exec", "-t", b.box.name, "--", "bash"]
     : ["exec", b.box.name, "--", ...cmd];
   return new Promise((resolve, reject) => {
     const child = spawn("msb", args, {

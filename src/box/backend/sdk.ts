@@ -29,7 +29,7 @@ async function ensureVolume(name: string): Promise<void> {
 }
 
 export async function buildSandbox(r: ResolvedBox, opts: BuildOpts): Promise<void> {
-  const args: string[] = ["create", r.image.base, "--name", r.box.name];
+  const args: string[] = ["run", "--snapshot", r.baseSnapshotName, "--name", r.box.name, "--detach"];
 
   if (r.box.resources.memoryMib) args.push("-m", `${r.box.resources.memoryMib}M`);
   if (r.box.resources.cpus) args.push("-c", String(r.box.resources.cpus));

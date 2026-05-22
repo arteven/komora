@@ -21,7 +21,7 @@ export async function rebuild(r: ResolvedBox): Promise<void> {
   const values = await collectWorkloadValues(r.secrets.workload);
   const secretArgs = buildSecretEnvArgs(values);
 
-  log.info(`creating ${r.box.name} from ${r.image.base}`);
+  log.info(`creating ${r.box.name} from snapshot ${r.baseSnapshotName}`);
   await buildSandbox(r, { secretArgs });
 
   // Wait for the sandbox to reach running state (msb create boots asynchronously)

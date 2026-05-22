@@ -21,10 +21,15 @@ describe("boxStatus", () => {
     expect(await boxStatus("komora-box")).toBe("running");
   });
 
-  it("returns 'stopped' when listed and status stopped/crashed/draining", async () => {
-    for (const s of ["stopped", "crashed", "draining"]) {
+  it("returns 'stopped' when listed and status stopped/draining", async () => {
+    for (const s of ["stopped", "draining"]) {
       listMock.mockResolvedValue([{ name: "komora-box", status: s }]);
       expect(await boxStatus("komora-box")).toBe("stopped");
     }
+  });
+
+  it("returns 'crashed' when listed and status crashed", async () => {
+    listMock.mockResolvedValue([{ name: "komora-box", status: "crashed" }]);
+    expect(await boxStatus("komora-box")).toBe("crashed");
   });
 });
