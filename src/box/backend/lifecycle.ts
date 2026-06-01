@@ -8,7 +8,7 @@ export async function up(name: string): Promise<void> {
 export async function down(name: string): Promise<void> {
   try {
     const h = await Sandbox.get(name);
-    await (h as any).stop();
+    await h.stop();
   } catch (e) {
     if (e instanceof SandboxNotFoundError) return;
     throw e;

@@ -23,7 +23,7 @@
     "ajv-formats": "^3.0.1",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
-    "microsandbox": "^0.4.6"
+    "microsandbox": "^0.5.4"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

@@ -1,3 +1,4 @@
+import { Sandbox, SandboxNotFoundError, MetricsDisabledError } from "microsandbox";
 import { loadBox } from "../box/index.js";
 import { boxStatus } from "../box/backend/status.js";
 import { probeSshd } from "../box/backend/ssh.js";
@@ -8,6 +9,19 @@ export async function statusCmd(opts: StatusOpts): Promise<void> {
   const b = await loadBox(opts.manifest);
   const state = await boxStatus(b.box.name);
   process.stdout.write(`${b.box.name}: ${state}\n`);
+
+  if (state === "running") {
+    try {
+      const h = await Sandbox.get(b.box.name);
+      const m = await h.metrics();
+      const memMib = Math.round(m.memoryBytes / (1024 * 1024));
+      process.stdout.write(`  cpu: ${m.cpuPercent.toFixed(1)}%  mem: ${memMib} MiB\n`);
+    } catch (e) {
+      if (!(e instanceof SandboxNotFoundError) && !(e instanceof MetricsDisabledError)) {
+        throw e;
+      }
+    }
+  }
 
   if (b.box.ssh?.enabled) {
     const port = b.box.ports.find((p: any) => p.guest === 22)?.host;

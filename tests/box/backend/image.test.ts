@@ -1,20 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { shell, create, builder } = vi.hoisted(() => {
+const { shell, createWithPullProgress, builder } = vi.hoisted(() => {
   const shell = vi.fn(async () => ({ success: true, code: 0, stdout: () => "", stderr: () => "" }));
-  const create = vi.fn(async () => ({
+  const sandbox = {
     shell,
     stop: vi.fn(),
     remove: vi.fn(),
+  };
+  const progressStream = {
+    [Symbol.asyncIterator]: () => ({
+      next: vi.fn(async () => ({ done: true, value: undefined })),
+    }),
+  };
+  const createWithPullProgress = vi.fn(async () => ({
+    progress: progressStream,
+    awaitSandbox: vi.fn(async () => sandbox),
   }));
   const builder = {
     image: vi.fn(() => builder),
+    imageWith: vi.fn(() => builder),
     memory: vi.fn(() => builder),
     cpus: vi.fn(() => builder),
     volume: vi.fn(() => builder),
-    create,
+    createWithPullProgress,
   };
-  return { shell, create, builder };
+  return { shell, createWithPullProgress, builder };
 });
 
 vi.mock("microsandbox", () => ({
@@ -80,5 +90,20 @@ describe("bake", () => {
     await bake(r);
     const calls = (builder.volume.mock.calls as any[]).map((c) => c[0]);
     expect(calls).toContain("/opt/komora/install");
+  });
+
+  it("uses imageWith when upperSizeMib is set", async () => {
+    const withUpper: ResolvedBox = {
+      ...r,
+      box: { ...r.box, resources: { upperSizeMib: 512 } },
+    };
+    await bake(withUpper);
+    expect(builder.imageWith).toHaveBeenCalled();
+    expect(builder.image).not.toHaveBeenCalled();
+  });
+
+  it("uses createWithPullProgress instead of create", async () => {
+    await bake(r);
+    expect(createWithPullProgress).toHaveBeenCalled();
   });
 });
