@@ -101,13 +101,14 @@ const manifestSchema = {
     box: {
       type: "object",
       properties: {
-        name: { type: "string", pattern: "^[a-z0-9]+(-[a-z0-9]+)*$" },
+        name: { type: "string", pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 128 },
         resources: {
           type: "object",
           properties: {
             memoryMib: { type: "integer", minimum: 256 },
             cpus: { type: "integer", minimum: 1 },
             diskGib: { type: "integer", minimum: 1 },
+            upperSizeMib: { type: "integer", minimum: 256 },
           },
           additionalProperties: false,
         },

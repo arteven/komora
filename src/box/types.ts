@@ -48,6 +48,7 @@ export interface Resources {
   memoryMib?: number;
   cpus?: number;
   diskGib?: number;
+  upperSizeMib?: number;
 }
 
 export interface ImageSection {

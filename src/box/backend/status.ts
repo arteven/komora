@@ -1,10 +1,10 @@
-import { Sandbox } from "microsandbox";
+import { Sandbox, type SandboxHandle } from "microsandbox";
 
 export type BoxState = "missing" | "running" | "stopped" | "crashed";
 
 export async function boxStatus(name: string): Promise<BoxState> {
   const handles = await Sandbox.list();
-  const found = handles.find((h: any) => h.name === name);
+  const found = handles.find((h: SandboxHandle) => h.name === name);
   if (!found) return "missing";
   if (found.status === "running") return "running";
   if (found.status === "crashed") return "crashed";
