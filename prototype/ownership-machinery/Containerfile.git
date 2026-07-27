@@ -1,0 +1,5 @@
+FROM docker.io/library/archlinux:base-devel
+RUN pacman -Sy --noconfirm git && pacman -Scc --noconfirm
+RUN groupadd -g 1000 agent && useradd -u 1000 -g 1000 -m -s /bin/bash agent
+USER 1000:1000
+WORKDIR /work
