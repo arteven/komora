@@ -762,16 +762,163 @@ full before building anything.
 
 ## Comparison table
 
-_(status: pending)_
+| Project | Substrate | Ownership approach | Credential injection | Lifecycle | Notable escape hatch |
+|---|---|---|---|---|---|
+| ai-pod | Podman/Docker | warn-only, user sets `PODMAN_USERNS=keep-id`; volumes chowned via disposable root container | copy-in/copy-out of `.claude.json` to a named volume, literal secrets baked in | ephemeral container, persistent named volumes | none notable — mostly warn-and-continue |
+| jail-ai | Podman (+ Apple `container`) | unconditional `--userns=keep-id` | direct bind-mount of host `~/.claude` | long-lived (`sleep infinity` + exec) | podman-in-podman socket mount (opt-in) |
+| ai-jail | bwrap / Seatbelt (no container) | moot — same host UID throughout | direct bind-mount of allow-listed dotdirs | process lifetime | Docker socket passthrough (opt-in, gated, warned) |
+| hort | designed for OCI, **unimplemented** | design-only: map container user to worktree owner | not implemented | designed long-lived per name | n/a — no working runtime yet |
+| yolobox | Podman/Docker/Apple `container` | `--userns=keep-id:uid=…,gid=…` + `:Z,U` volume repair flag | per-tool config flags + env passthrough allowlist | `--rm` + persistent volumes | `--cap-add`/`--device`/`seccomp=unconfined` (warned, not blocked) |
+| drydock | Apple `container` VM + broker | n/a (agent never touches host FS directly) | short-lived, budget-capped bearer tokens via gateway; OAuth stored host-side, **not per-task revocable** | fresh VM per task | `--auto-approve` bypasses diff-review gate |
+| nono | Landlock/seccomp/Seatbelt (no container) | n/a | `--allow <path>` capability grants | process lifetime | `--allow-command` for blocked exec |
+| mattolson_agent-sandbox | Docker Compose | fixed uid 501 baked into image (matches macOS default user) | mitmproxy sidecar + `GIT_ASKPASS` shim, secrets never in agent container | long-lived (`sleep infinity`) | none found — capabilities narrowly scoped |
+| sandboxed.sh | systemd-nspawn (Docker for control plane only) | relies on nspawn's own idmap; not custom-solved | file-path-only env var pointing at a credentials file | persistent dirs, `--ephemeral` optional | Docker install path requires `privileged: true` |
+| sandbox-runtime | bubblewrap + custom seccomp (no container) | moot — real host FS bind-mounted | `maskedFileBinds` (blocks reads, doesn't inject) | one process per command | `enableWeakerNestedSandbox` drops `/proc` protection for Docker nesting |
+| OpenShell | gRPC-pluggable: Podman/Docker/Kubernetes/VM | root-in-container + supervisor `setuid()`/`chown()` down, extra caps kept live | gateway-mediated; root-only Podman secrets | gRPC create/delete/watch, server-managed | container-level seccomp deliberately `unconfined` (supervisor self-seals its own filter) |
+| agent-vm | libkrun/microsandbox microVM | n/a — VM owns its own filesystem via virtio-fs | two-layer placeholder + MITM-splice of real token on egress; no refresh yet | ephemeral VM, persistent host state dir | root-in-guest accepted because VM is the isolation boundary |
+| thomaspeklak/agent-sandbox | Podman | `--userns=keep-id` (default), explicit `root()` opt-out for package installs | persistent cache volumes + custom auth-proxy OAuth callback relay | `--rm` + persistent volumes | `root()` security profile, `lockdown()` for hardening up |
+| marvincaspar/agent-sandbox | Docker (Bash scripts) | explicit `--user uid:gid` + world-writable image paths | env allowlist + bind-mounted config dirs; fake-browser URL relay for OAuth | fully ephemeral, PID-suffixed names | proxy is opt-in — unrestricted egress without it |
 
 ## Techniques worth adopting
 
-_(status: pending)_
+1. **thomaspeklak's plan/render split** (`LaunchPlan` struct → validated in
+   process → rendered to `podman run` argv as a last step). This is a clean
+   fit for Go: build a typed, testable intermediate representation of "what
+   this sandbox invocation should do," validate it before touching the
+   runtime, and keep the runtime-specific argv-building as a thin final
+   layer. It also makes a future second backend cheap without a rewrite.
+2. **OpenShell's driver-as-gRPC-service contract.** Even if komora ships one
+   backend (Podman) for a long time, defining the driver boundary as a
+   small, explicit interface (create/delete/get/list/watch/capabilities) up
+   front — rather than letting Podman-specific flag-building leak through
+   the whole codebase — is what let OpenShell add Kubernetes and VM drivers
+   without touching the gateway.
+3. **jail-ai's unconditional `--userns=keep-id` for the simple case**, with
+   thomaspeklak's `root()`-style *named, deliberate* escape hatch for the
+   one workflow (package installs) that needs full root. Two clean states
+   beat ai-pod's "warn and hope the user reads it" default.
+2b. **yolobox's `:U` volume-repair flag as an admission, not an
+   afterthought.** Whatever ownership mechanism komora ships v1 with, plan
+   for a migration path from day one — yolobox needed one for its own past
+   keep-id bug, and it's cheap to add now vs. retrofit later.
+4. **drydock's named, scoped escape hatches with an explicit "what this
+   bypasses" statement** (`--auto-approve`, `--no-token`,
+   `per_task_widening.requires_approval: false`) rather than one big
+   `--privileged`/`--insecure` knob. Same spirit in mattolson's narrowly
+   re-added capabilities (`NET_ADMIN, NET_RAW, SETUID, SETGID`, not
+   `--privileged`) and ai-jail's `docker_passthrough_active()` gate that is
+   forced off under lockdown/browser modes regardless of the flag.
+5. **sandboxed.sh's "env carries only a file path, never the secret"**
+   design for anything that has to cross into the sandboxed process's
+   environment — argv and env are both visible via `/proc/<pid>/environ`
+   and `/proc/<pid>/cmdline` to anything with ptrace-adjacent access on the
+   host side; a file path is strictly less exposure than the value itself.
+6. **sandbox-runtime's principle that in-sandbox diagnostic data is never
+   authoritative for policy** (`process_vm_readv` values are "a HINT for
+   diagnostics and must never gate a policy decision") — worth writing into
+   komora's own observability code from day one rather than relearning it.
+7. **ai-pod's proactive workspace credential-file scan before mounting**
+   (`.env*`, `id_rsa`, `.npmrc`, `.netrc`, cloud credential JSON, `*.pem`
+   etc.) as a "hide from AI" prompt. Even a simple heuristic scan catches a
+   real, common class of accidental exposure that a pure allow/deny-dotdir
+   list (ai-jail's approach) misses, since it also covers files *inside*
+   the project workspace itself, not just home-directory dotdirs.
 
 ## Techniques worth avoiding
 
-_(status: pending)_
+1. **ai-pod's silent-by-default ownership handling.** A warning printed to
+   stderr that the user must read *before* invoking the tool, with no
+   automatic fix and no hard failure, is the worst of both worlds: it
+   doesn't prevent the bug, and it's easy to miss in a busy terminal. Either
+   auto-apply `keep-id` (jail-ai's approach) or fail fast with the fix
+   command in the error, don't warn-and-continue.
+2. **Baking a hardcoded personal identity into a Dockerfile as a "fallback"**
+   (ai-pod's leftover author git identity). If a genericized example needs
+   a fallback, use an obviously-placeholder value (`sandbox@localhost`),
+   not a real person's name/email — this is an easy thing to forget to
+   scrub when adapting an upstream Dockerfile, and it's a privacy leak
+   nobody will notice until commits show up wrong.
+3. **Relying on world-writable image paths for ownership** (marvincaspar's
+   `chmod 1777`/`chmod a+w /etc/passwd`). It works, but it's brittle to
+   replicate correctly on a new image and weakens the container's own
+   internal permission model (any process in the container can now write
+   those paths, not just the intended runtime user) — keep-id-style UID
+   mapping is a cleaner boundary if the runtime supports it.
+4. **One undifferentiated `--insecure`/`--privileged` toggle.** None of the
+   more mature projects in this set do this — they all name specific,
+   narrow escape hatches (drydock, ai-jail, mattolson). A single broad
+   toggle makes it impossible to reason about what a user actually opted
+   into, and it's the kind of thing that gets flipped on "just to make it
+   work" and forgotten.
+5. **Silent per-launch network calls that regress cold-start UX**
+   (agent-vm's `gh api user` incident, which doubled launch time until
+   caught and cached). Any convenience feature that adds a network round
+   trip to the hot path needs an explicit cache-and-measure step before
+   shipping, not after a user notices it's slow.
+6. **Trusting in-container observability without a note that it's
+   spoofable** — the inverse of the "adopt" item above: don't build
+   anything (in komora's audit log, say) that reads process state from
+   inside the sandbox and treats it as ground truth for an allow/deny
+   decision, per sandbox-runtime's explicit warning about
+   `process_vm_readv`-sourced data.
 
 ## Contradictions with the map's assumptions
 
-_(status: pending)_
+Referring to issue #1's premises (rootless Podman + Go is a solved-enough
+starting point for this project):
+
+- **"Ownership is a solved problem with one flag" does not hold up.**
+  Every project that touches it directly needed at least one additional
+  mechanism beyond `--userns=keep-id` itself: ai-pod needs a disposable
+  root-chown container for named volumes on top of the (unapplied) keep-id
+  warning; yolobox needed a `:U` volume-migration flag to repair its *own*
+  prior keep-id bug; OpenShell avoided keep-id entirely in favor of
+  in-container `setuid()`/`chown()` with extra capabilities kept live;
+  thomaspeklak needed an explicit `root()` opt-out for the one workflow
+  keep-id breaks (package installs). None of the four Podman-based projects
+  that actually ship this treat it as a single static flag with no
+  follow-up work — the load-bearing ownership question this issue opened
+  with is real, not a formality, and the ownership-probe track's own
+  findings should be read alongside this: expect at least a chown-repair
+  path and an explicit non-keep-id mode, not just one flag set once.
+- **A meaningful fraction of the harvested corpus isn't container-based at
+  all.** ai-jail, nono, and sandbox-runtime (3 of 14) use bubblewrap/
+  Landlock/seccomp/Seatbelt directly with no container runtime, and
+  sandboxed.sh's actual isolation layer is systemd-nspawn with Docker only
+  wrapping the control plane. If komora's assumption is "rootless Podman is
+  *the* mainstream approach for this problem space," that's true for only
+  about half of what's actually been built and shipped — the other half
+  independently decided a container runtime was unnecessary overhead for
+  the same problem. That's not an argument to abandon containers (isolation
+  strength differs meaningfully — namespace/seccomp sandboxes share a
+  kernel and binaries with the host, VMs and containers don't), but it is
+  evidence the "obviously containers" framing wasn't obvious to a
+  meaningful share of prior builders, and it's worth being explicit in
+  komora's own spec about *why* containers specifically (image
+  reproducibility? stronger isolation? something else) rather than treating
+  it as unquestioned.
+- **The credential-brokering problem the prior `archive/komora-research`
+  spec paused on (response-body MITM rewrite for OAuth subscription tokens)
+  is not solved anywhere in this harvest either, container or VM-based.**
+  agent-vm (VM-backed, closest architecture to the paused spec)
+  independently hit and is still missing the same OAuth-refresh-response
+  MITM capability the archive spec identified as its blocker. drydock
+  sidesteps it by accepting "not per-task revocable" as a documented
+  residual risk rather than solving it. No project in this harvest — Rust,
+  Go, container, or VM — has a working response-side MITM rewrite for
+  subscription OAuth tokens. If komora's Go rewrite intends to offer
+  credential isolation *for subscription users specifically*, that
+  capability gap is real and unaddressed industry-wide, not a
+  Rust-vs-Go or container-vs-VM artifact — it should be scoped as its own
+  slice with its own explicit go/no-go gate, the same way the archive spec
+  originally did.
+- **"A CLI wrapper around `podman run` is a thin, mostly-mechanical layer"
+  undersells the actual scope once ownership, credentials, and lifecycle
+  are all handled properly.** The more complete projects here (OpenShell,
+  thomaspeklak, yolobox, ai-pod) all grew a plan/validate/render step, a
+  credential-proxy or auth-relay subsystem, and non-trivial volume/lifecycle
+  bookkeeping — none of them stayed a thin wrapper for long. Scoping komora
+  P1 as "just shell out to podman with the right flags" likely
+  understates the eventual surface area; the harvested precedent suggests
+  budgeting for a typed launch-plan layer and a credential subsystem from
+  the start rather than retrofitting them.
