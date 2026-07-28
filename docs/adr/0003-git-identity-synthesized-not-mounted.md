@@ -1,0 +1,170 @@
+# ADR-0003: Git identity is synthesized, never mounted
+
+- **Status**: Accepted
+- **Date**: 2026-07-28
+- **Ticket**: [#13 Decide how git identity reaches a chamber](https://github.com/arteven/komora/issues/13)
+- **Split from**: [#4 Choose the chamber image](https://github.com/arteven/komora/issues/4), where identity was carved out of the dotfiles decision
+- **Bounded by**: [#9 Decide the git credential path](https://github.com/arteven/komora/issues/9) — push credentials and signing keys are that ticket's, not this one's
+
+## Context
+
+Correct git identity is a **Must**-tier fidelity requirement: a chamber whose
+commits are attributed wrongly fails the contract on first real use, and wrong
+attribution is expensive to unwind once it is in someone else's history.
+
+#4 decided the image carries **no dotfiles**. That cannot simply extend to git
+identity, because identity is Must-tier while dotfiles generally are not — so
+identity needs its own answer rather than inheriting #4's.
+
+A representative host global config sorts into four groups: identity
+(`user.name`, `user.email`); a GUI merge/difftool bound to an **absolute host
+binary path**, plus its prompt/backup settings; behavioural preferences
+(`init.defaultBranch` and an advice suppression); and credential helpers that
+shell out to a host CLI **by absolute path**.
+
+That distribution is the whole argument. Bind-mounting the host file imports
+entries that are broken inside a chamber (a GUI tool that has neither its binary
+nor a display) and entries that are unwanted (credential helpers, which would
+drag #9's exposure decision in silently, through the identity path, without
+anyone deciding it) — in order to deliver the two lines that actually matter.
+
+Under [ADR-0001](0001-arch-base-image-recreatable-not-reproducible.md), a
+mounted config is also not **irreplaceable** — it regenerates from its sources
+trivially — so the disposability constraint gives no reason to mount either.
+
+## Decision
+
+### 1. Synthesize, never mount
+
+komora writes the chamber's `.gitconfig` itself. The host's `~/.gitconfig` is
+never bind-mounted, and neither is any file that `include`s it.
+
+Synthesis means komora pulls **named values**, never a file. The difftool block
+and the credential helpers therefore do not travel, by construction rather than
+by filtering.
+
+### 2. Regenerated on every chamber start
+
+The chamber's `.gitconfig` is a **derived artifact**, rewritten on each start.
+The chamber holds a copy; the truth lives outside it.
+
+The alternative — writing it once at chamber creation — puts identity in the
+writable layer, where ADR-0001 says nothing irreplaceable may live. It would
+survive until a recreate silently reset it. Regenerating on start makes a
+recreate a non-event, and it is what allows a mid-work profile switch (#8) to
+re-derive identity correctly rather than leaving the pre-switch value in place.
+
+### 3. Resolution order, with the host as a fallback source
+
+For each essential key, at chamber start, first hit wins:
+
+1. **komora's own config** — set via `komora git config`
+2. **the host's `git config --global`**
+3. **the repo's own config** (`--local`, in the project being chambered)
+4. **none** — see §5
+
+komora's config is an **override**, not a prerequisite. An unconfigured komora
+still produces correct identity by reading through to the host, so first launch
+needs no setup step — which matters because zero-ceremony launch is itself
+Must-tier.
+
+Reading the host here is not a retreat from §1. §1 governs *what form* the value
+takes (named values, not a mounted file); this governs *where the value comes
+from when komora has none*. The host is back in the loop deliberately, as a
+source — the resolution still happens fresh on every start, and the result is
+still derived and disposable.
+
+### 4. Seeded defaults, extended in git's own syntax
+
+komora seeds three keys: `user.name`, `user.email`, `init.defaultBranch`.
+
+These are **defaults, not an allowlist**. Any key can be added with:
+
+```
+komora git config <key> <value>
+```
+
+which follows git's own key/value syntax, so there is no second vocabulary.
+This replaces the fixed-allowlist-plus-passthrough-knob design considered
+first: the escape hatch is the command surface itself, so a missed key costs a
+command rather than a code change.
+
+**One deliberate seam.** komora borrows git's key/value syntax but **not** git's
+scope flags. Git's `--global`/`--local`/`--system` describe git's own scopes;
+komora's scope axis is *global to komora* vs *per-profile* (§6), which is a
+different shape. Reusing git's flag names would make `--global` mean two things.
+komora keeps its own scope flag with its own name; the spelling belongs to #7.
+
+`core.editor` is deliberately **left unset**. Under §4 it is not a decision —
+it is a key to set if git's fallback ever becomes annoying.
+
+### 5. Unresolved identity warns and requires confirmation
+
+If all three sources are empty, komora **warns and asks for confirmation**
+before starting. On confirm, the chamber starts without git identity, and the
+human has accepted that commits will fail or misattribute. On decline, no
+chamber starts.
+
+Rejected alternatives, and why:
+
+- **Start silently with no identity** — this is the failure the ticket exists
+  to prevent. Git falls back to a container-derived identity, commits look
+  plausible, and the damage is found later in a real repo's history.
+- **Refuse to launch outright** — holds hostage work that has nothing to do
+  with git. An identityless repo an agent only needs to *read* becomes
+  unlaunchable.
+- **Mechanically disable git** — needs an enforcement mechanism, and the weak
+  version of it (just not writing a `.gitconfig`) is the silent-misattribution
+  case above wearing a different hat. Confirmation puts the human in the loop
+  and needs no enforcement at all.
+
+Two requirements follow. The warning must **name the sources it checked** and
+the command to fix it — "no git identity found" sends the reader hunting,
+whereas naming komora config, host global, and repo local does not. And there
+must be a **non-interactive pre-confirm flag**: a prompt is correct for a human
+at a terminal and fatal for anything scripted. Both land on #7.
+
+### 6. Global identity, with per-profile override
+
+Identity is global to komora by default. A profile may override it, and the
+profile's value wins when present.
+
+Profiles are a **credential selection**, and identity is not a credential —
+which argues identity sits off the profile axis entirely. But if a profile ever
+corresponds to a separate context (work vs personal accounts), a single global
+identity misattributes every commit made under it, which is the Must-tier
+failure again. Global-with-override forces no decision now and precludes
+nothing; the override's mechanics belong to #8.
+
+### 7. Commit signing is explicitly declined
+
+Not an oversight — a stated non-goal.
+
+A signing key is a **credential**. Getting one into a chamber means mounting key
+material into the blast radius or forwarding an agent socket, which #9 names as
+a signing oracle: anything in the chamber can use it against every repo the
+developer can reach. That is precisely the exposure the safety driver exists to
+avoid, and admitting it here would smuggle it in as a side effect of an
+*identity* decision rather than a deliberate credential one.
+
+Identity is *who the commits say they are from*. Signing is *proof it was really
+them*. Different problems. If signing is ever wanted, it enters through #9 as a
+credential decision — **never** through the identity path.
+
+## Consequences
+
+- Anything not in the resolution chain is simply **absent** inside a chamber.
+  This is the honest cost of synthesis, and it is discovered by missing it. §4
+  makes recovery a single command.
+- **#7 inherits three requirements**: the `komora git config` surface, komora's
+  own scope flag (distinct from git's), and a non-interactive pre-confirm flag
+  for the §5 warning. These are the first concrete constraints placed on the
+  command surface from outside that ticket.
+- **#8 inherits** the per-profile identity override.
+- Chamber start becomes **conditionally interactive** — only on the unresolved
+  path, and permanently quiet once identity resolves anywhere in the chain.
+- The generalisable rule, and the one worth remembering: **pull named values,
+  never mount a config file.** A host config file is a bundle of host-bound
+  assumptions — absolute binary paths, credential helpers, `includeIf` chains.
+  Mounting it imports every one of them to obtain the few that were wanted, and
+  the imported ones fail in ways that look like komora's fault.

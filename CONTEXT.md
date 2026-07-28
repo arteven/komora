@@ -22,8 +22,15 @@ bubblewrap/Landlock host-process isolation, which komora deliberately is not.
 images, not an in-chamber toolchain manager. See
 [ADR-0001](docs/adr/0001-arch-base-image-recreatable-not-reproducible.md).
 
+**Derived config** — configuration komora writes *into* a chamber and rewrites
+on every start, so the chamber holds only a copy and never the truth. The
+chamber's `.gitconfig` is the first instance. Contrast a bind-mounted host file,
+which makes the chamber a live window onto the host. See
+[ADR-0003](docs/adr/0003-git-identity-synthesized-not-mounted.md).
+
 **Profile** — a **credential selection**, not an identity axis. Switchable
-mid-work.
+mid-work. Git identity is global to komora by default, but a profile may
+override it.
 
 **Recreatable, not reproducible** — a rebuild must produce a *working* chamber,
 not a *bit-identical* one. The test for whether something may live in a
@@ -37,3 +44,9 @@ reachability). Held on the map.
 
 **Slice** — a working vertical increment. Each leaves something usable; slices
 ship in order and don't front-load decisions a later slice answers better.
+
+**Synthesize, never mount** — komora pulls **named values** from a source
+rather than bind-mounting the file that holds them. A host config file bundles
+host-bound assumptions (absolute binary paths, credential helpers, `includeIf`
+chains); mounting it imports all of them to obtain the few that were wanted. See
+[ADR-0003](docs/adr/0003-git-identity-synthesized-not-mounted.md).
