@@ -4,6 +4,8 @@ set -euo pipefail
 
 KOMORA_DRY_RUN=0
 KOMORA_CWD="$PWD"
+KOMORA_IMAGE="${KOMORA_IMAGE:-ghcr.io/nvidia/openshell-community/sandboxes/base:latest}"
+KOMORA_PROFILE="${KOMORA_PROFILE:-default}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -16,6 +18,8 @@ commands:
   shell       open a shell in the sandbox instead of the agent
   id [owner/repo]
               resolve and print the repo id and slug this invocation means
+  volumes <slug> [profile]
+              create and prime the repo and profile volumes
 
   --dry-run   print podman/openshell invocations instead of running them
 EOF
@@ -49,6 +53,57 @@ slugify() {
 cmd_ls() {
   plan podman volume ls --filter "label=komora"
   plan podman ps --all --filter "label=komora"
+}
+
+# Reads the sandbox user's uid out of the image's own /etc/passwd at run time
+# (#14, #17). Never hardcoded: it is 998 in the current community base image
+# and would differ in a custom one. `--entrypoint sh` is required — the image's
+# own entrypoint is /bin/bash, which would otherwise swallow "sh" as its argv
+# rather than exec it.
+resolve_sandbox_uid() {
+  podman run --rm --entrypoint sh "$KOMORA_IMAGE" -c 'getent passwd sandbox | cut -d: -f3'
+}
+
+# Creates a named volume if it does not already exist. `podman volume create`
+# is not itself idempotent — it errors on an existing name — so existence is
+# checked first (#17 acceptance: creating is idempotent).
+ensure_volume() {
+  local vol="$1"; shift
+  podman volume exists "$vol" 2>/dev/null && return 0
+  plan podman volume create "$@" "$vol"
+}
+
+# Primes a volume so the sandbox uid can write it. Podman's first-mount
+# auto-chown of an empty named volume targets container root, not the sandbox
+# uid OpenShell's supervisor setuid()s down to — so an unprimed volume mounts
+# but is not writable by the agent. Priming must *write* as that uid; a run
+# that only mounts does not trigger the chown (#14, #17). Idempotent: touching
+# an existing .keep neither errors nor destroys other content in the volume.
+prime_volume() {
+  local vol="$1" uid="$2"
+  plan podman run --rm --user "${uid}:${uid}" --entrypoint sh \
+    -v "${vol}:/x" "$KOMORA_IMAGE" -c 'touch /x/.keep'
+}
+
+# Creates and primes both persistent volumes for a repo slug + profile name:
+# komora-repo-<slug> (clone + working state) and komora-profile-<name>
+# (credential, MCP OAuth tokens, session history) (#14, #17).
+cmd_volumes() {
+  local slug="${1:?komora: volumes requires a repo slug}"
+  local profile="${2:-$KOMORA_PROFILE}"
+  local repo_vol="komora-repo-${slug}"
+  local profile_vol="komora-profile-${profile}"
+
+  local uid; uid="$(resolve_sandbox_uid)"
+
+  ensure_volume "$repo_vol" --label "komora" --label "komora.repo=${slug}"
+  ensure_volume "$profile_vol" --label "komora" --label "komora.profile=${profile}"
+
+  prime_volume "$repo_vol" "$uid"
+  prime_volume "$profile_vol" "$uid"
+
+  echo "repo volume: $repo_vol"
+  echo "profile volume: $profile_vol"
 }
 
 cmd_stop() {
@@ -158,6 +213,7 @@ main() {
     rm)    cmd_rm "$@" ;;
     shell) cmd_shell "$@" ;;
     id)    cmd_id "$@" ;;
+    volumes) cmd_volumes "$@" ;;
     -h|--help|"") usage; [[ "$command" == "" ]] && exit 2 || exit 0 ;;
     *)
       echo "komora: unknown command '$command'" >&2

@@ -202,3 +202,84 @@ EOF
   assert_equal "$output" "$first"
   assert_equal "$output" "foo-bar-baz"
 }
+
+# --- Volume priming (#14, #17) ---
+# A fake `podman` stands in for the real binary so these run without a live
+# Podman daemon or the multi-gigabyte base image. It answers exactly the calls
+# cmd_volumes makes: uid resolution (`run --rm --entrypoint sh ... getent
+# passwd sandbox`), existence checks, and the create/prime invocations get
+# passed straight to `plan`, which under --dry-run never reaches podman at all.
+
+fake_podman_priming() {
+  local uid="$1" existing_vol="${2:-}"
+  local fake_dir; fake_dir="$(mktemp -d)"
+  cat > "$fake_dir/podman" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "run" && "\$*" == *"getent passwd sandbox"* ]]; then
+  echo "$uid"
+  exit 0
+fi
+if [[ "\$1" == "volume" && "\$2" == "exists" ]]; then
+  [[ "\$3" == "$existing_vol" ]] && exit 0
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "$fake_dir/podman"
+  printf '%s' "$fake_dir"
+}
+
+@test "resolve_sandbox_uid reads the uid from the image, not a hardcoded value" {
+  local fake_dir; fake_dir="$(fake_podman_priming "998")"
+  PATH="$fake_dir:$PATH" run bash -c "source '$KOMORA_BIN' --source-only; resolve_sandbox_uid"
+  assert_success
+  assert_output "998"
+  rm -rf "$fake_dir"
+}
+
+@test "resolve_sandbox_uid reflects whatever uid the image reports, proving no hardcoded fallback" {
+  local fake_dir; fake_dir="$(fake_podman_priming "1234")"
+  PATH="$fake_dir:$PATH" run bash -c "source '$KOMORA_BIN' --source-only; resolve_sandbox_uid"
+  assert_success
+  assert_output "1234"
+  rm -rf "$fake_dir"
+}
+
+@test "--dry-run volumes creates both volumes and primes both as the resolved uid" {
+  local fake_dir; fake_dir="$(fake_podman_priming "998")"
+  PATH="$fake_dir:$PATH" run "$KOMORA_BIN" --dry-run volumes myslug myprofile
+  assert_success
+  assert_output --partial "komora-repo-myslug"
+  assert_output --partial "komora-profile-myprofile"
+  assert_output --partial "--user 998:998"
+  # both volumes primed, not just one
+  local prime_lines
+  prime_lines="$(grep -c 'touch.*/x/.keep' <<< "$output")"
+  assert_equal "$prime_lines" 2
+  rm -rf "$fake_dir"
+}
+
+@test "--dry-run volumes defaults the profile to 'default' when none is given" {
+  local fake_dir; fake_dir="$(fake_podman_priming "998")"
+  PATH="$fake_dir:$PATH" run "$KOMORA_BIN" --dry-run volumes myslug
+  assert_success
+  assert_output --partial "komora-profile-default"
+  rm -rf "$fake_dir"
+}
+
+@test "--dry-run volumes skips volume create for a volume that already exists (idempotent)" {
+  local fake_dir; fake_dir="$(fake_podman_priming "998" "komora-repo-myslug")"
+  PATH="$fake_dir:$PATH" run "$KOMORA_BIN" --dry-run volumes myslug myprofile
+  assert_success
+  refute_output --partial "volume create --label komora --label komora.repo=myslug komora-repo-myslug"
+  assert_output --partial "volume create --label komora --label komora.profile=myprofile komora-profile-myprofile"
+  # priming still runs against the pre-existing volume
+  assert_output --partial "komora-repo-myslug:/x"
+  rm -rf "$fake_dir"
+}
+
+@test "volumes requires a slug argument" {
+  run "$KOMORA_BIN" volumes
+  assert_failure
+  assert_output --partial "requires a repo slug"
+}
