@@ -1,0 +1,45 @@
+# PROTOTYPE chamber image for #6 (walking skeleton).
+# Follows ADR-0001 (Arch base, recreatable-not-reproducible) and #4's toolset.
+# Three layers, cheapest-changing at the bottom.
+
+FROM docker.io/library/archlinux:base-devel
+
+# --- Layer 1: base refresh + `extra` (gh lives there; base-devel doesn't enable it)
+RUN pacman -Syu --noconfirm && \
+    pacman -S --noconfirm --needed git openssh ca-certificates zsh && \
+    pacman -Scc --noconfirm
+
+# --- Layer 2: language runtimes (the ~1.5 GB tier)
+RUN pacman -Sy --noconfirm --needed \
+        go nodejs npm python python-pip uv ripgrep && \
+    pacman -Scc --noconfirm
+
+# --- Layer 3: CLI tools + agent CLI (small, changes often)
+# `gh` is packaged as `github-cli` in `extra`. #4 recorded this as "extra isn't
+# enabled in the minimal image"; it is enabled — the name is just different.
+RUN pacman -Sy --noconfirm --needed github-cli jq fd curl wget less && \
+    pacman -Scc --noconfirm
+
+# The agent user. uid/gid 1000 is the image's own identity — the N that
+# --userns=keep-id:uid=N,gid=N must name (ADR-0002).
+RUN groupadd -g 1000 agent && \
+    useradd -u 1000 -g 1000 -m -s /bin/zsh agent
+
+USER 1000:1000
+ENV HOME=/home/agent
+WORKDIR /work
+
+# Claude Code via the native installer, not npm — keeps the agent runtime off
+# the image's Node 26 (#4 item 4). Auto-updater deliberately left enabled:
+# ~/.local/share/claude/versions/ must stay writable.
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# #4 decided "no dotfiles". That cannot extend to *existence*: with no ~/.zshrc,
+# zsh runs zsh-newuser-install on first interactive start, which grabs the
+# keyboard and breaks paste/keys until dismissed. An empty file is not personal
+# shell config — it is the switch that turns the wizard off.
+RUN touch /home/agent/.zshrc
+
+ENV PATH=/home/agent/.local/bin:$PATH
+ENV LANG=C.UTF-8
+CMD ["/bin/zsh", "-l"]

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# komora: a thin wrapper around the openshell CLI. Scaffold: #15. Spec: #14.
+set -euo pipefail
+
+KOMORA_DRY_RUN=0
+
+usage() {
+  cat >&2 <<'EOF'
+usage: komora [--dry-run] <command> [args...]
+
+commands:
+  ls          list komora sandboxes and volumes
+  stop        stop a running sandbox
+  rm          remove a sandbox (or, with intent, a volume)
+  shell       open a shell in the sandbox instead of the agent
+
+  --dry-run   print podman/openshell invocations instead of running them
+EOF
+}
+
+# --- the dry-run seam: every external invocation goes through `plan`, which
+# either prints the command (one per line, args in call order) or execs it.
+# This is the seam every later ticket's tests assert against (#14).
+plan() {
+  if [[ "$KOMORA_DRY_RUN" -eq 1 ]]; then
+    local line="" arg
+    for arg in "$@"; do
+      printf -v arg '%q' "$arg"  # shell-quote in place, not append
+      line+="${line:+ }${arg}"
+    done
+    printf '%s\n' "$line"
+  else
+    "$@"
+  fi
+}
+
+cmd_ls() {
+  plan podman volume ls --filter "label=komora"
+  plan podman ps --all --filter "label=komora"
+}
+
+cmd_stop() {
+  echo "komora: stop not yet implemented" >&2
+  return 1
+}
+
+cmd_rm() {
+  echo "komora: rm not yet implemented" >&2
+  return 1
+}
+
+cmd_shell() {
+  echo "komora: shell not yet implemented" >&2
+  return 1
+}
+
+main() {
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) KOMORA_DRY_RUN=1 ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+
+  set -- "${args[@]+"${args[@]}"}"
+
+  local command="${1:-}"
+  [[ $# -gt 0 ]] && shift || true
+
+  case "$command" in
+    ls)    cmd_ls "$@" ;;
+    stop)  cmd_stop "$@" ;;
+    rm)    cmd_rm "$@" ;;
+    shell) cmd_shell "$@" ;;
+    -h|--help|"") usage; [[ "$command" == "" ]] && exit 2 || exit 0 ;;
+    *)
+      echo "komora: unknown command '$command'" >&2
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
