@@ -3,16 +3,19 @@
 set -euo pipefail
 
 KOMORA_DRY_RUN=0
+KOMORA_CWD="$PWD"
 
 usage() {
   cat >&2 <<'EOF'
-usage: komora [--dry-run] <command> [args...]
+usage: komora [--dry-run] [--cwd DIR] <command> [args...]
 
 commands:
   ls          list komora sandboxes and volumes
   stop        stop a running sandbox
   rm          remove a sandbox (or, with intent, a volume)
   shell       open a shell in the sandbox instead of the agent
+  id [owner/repo]
+              resolve and print the repo id and slug this invocation means
 
   --dry-run   print podman/openshell invocations instead of running them
 EOF
@@ -32,6 +35,15 @@ plan() {
   else
     "$@"
   fi
+}
+
+# Maps an owner/repo (or any string) to a Podman/OpenShell-safe volume slug:
+# lowercase, [a-z0-9-] only. Not injective by design (#14, #16) — collision
+# detection against existing volumes is the caller's job, not this function's.
+slugify() {
+  local s="${1,,}"
+  s="${s//[^a-z0-9]/-}"
+  printf '%s' "$s"
 }
 
 cmd_ls() {
@@ -54,12 +66,84 @@ cmd_shell() {
   return 1
 }
 
+# Parses an `origin` remote URL into owner/repo. Handles both forms git
+# actually produces: SSH shorthand (git@host:owner/repo.git) and HTTPS
+# (https://host/owner/repo.git), with an optional trailing ".git" (#16).
+parse_remote_url() {
+  local url="$1" path
+  case "$url" in
+    git@*:*)   path="${url#*:}" ;;
+    https://*) path="${url#https://*/}" ;;
+    http://*)  path="${url#http://*/}" ;;
+    *) return 1 ;;
+  esac
+  path="${path%.git}"
+  path="${path%/}"
+  [[ "$path" == */* ]] || return 1
+  printf '%s' "$path"
+}
+
+# Derives owner/repo from `git remote get-url origin` in KOMORA_CWD, if that
+# directory is inside a clone with an origin remote.
+derive_repo_id() {
+  local url
+  url="$(git -C "$KOMORA_CWD" remote get-url origin 2>/dev/null)" || return 1
+  parse_remote_url "$url"
+}
+
+# Reads the owner/repo recorded on an existing repo volume's komora.repo
+# label, if that volume exists. Empty output (not failure) if it doesn't —
+# "no volume yet" and "lookup error" are both "nothing to collide with".
+existing_volume_repo() {
+  local vol="$1"
+  podman volume inspect --format '{{ index .Labels "komora.repo" }}' "$vol" 2>/dev/null || true
+}
+
+# Refuses a slug collision: two different owner/repo values that slug to the
+# same volume name would otherwise silently share one repo volume (#14, #16).
+check_slug_collision() {
+  local repo_id="$1" slug="$2"
+  local vol="komora-repo-${slug}"
+  local existing; existing="$(existing_volume_repo "$vol")"
+
+  if [[ -n "$existing" && "$existing" != "$repo_id" ]]; then
+    echo "komora: slug collision on '$slug'" >&2
+    echo "  '$repo_id' and '$existing' both slug to '$slug'" >&2
+    echo "  refusing to share the same volume between different repos" >&2
+    return 1
+  fi
+}
+
+# Resolves the repo id (owner/repo) this invocation means: a positional
+# argument if given, else derived from `git remote get-url origin` (#16).
+cmd_id() {
+  local repo_id="${1:-}"
+
+  if [[ -z "$repo_id" ]]; then
+    repo_id="$(derive_repo_id)" || {
+      echo "komora: no repo given and not in a host clone" >&2
+      echo "  pass an explicit owner/repo, or run inside a clone with an 'origin' remote" >&2
+      return 1
+    }
+  fi
+
+  local slug; slug="$(slugify "$repo_id")"
+  check_slug_collision "$repo_id" "$slug" || return 1
+
+  echo "repo: $repo_id"
+  echo "slug: $slug"
+}
+
 main() {
   local args=()
-  for arg in "$@"; do
-    case "$arg" in
-      --dry-run) KOMORA_DRY_RUN=1 ;;
-      *) args+=("$arg") ;;
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) KOMORA_DRY_RUN=1; shift ;;
+      --source-only) return 0 ;;
+      --cwd)
+        [[ $# -ge 2 ]] || { echo "komora: --cwd requires a directory argument" >&2; exit 2; }
+        KOMORA_CWD="$2"; shift 2 ;;
+      *) args+=("$1"); shift ;;
     esac
   done
 
@@ -73,6 +157,7 @@ main() {
     stop)  cmd_stop "$@" ;;
     rm)    cmd_rm "$@" ;;
     shell) cmd_shell "$@" ;;
+    id)    cmd_id "$@" ;;
     -h|--help|"") usage; [[ "$command" == "" ]] && exit 2 || exit 0 ;;
     *)
       echo "komora: unknown command '$command'" >&2
