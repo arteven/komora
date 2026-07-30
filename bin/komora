@@ -7,19 +7,27 @@ KOMORA_CWD="$PWD"
 KOMORA_IMAGE="${KOMORA_IMAGE:-ghcr.io/nvidia/openshell-community/sandboxes/base:latest}"
 KOMORA_PROFILE="${KOMORA_PROFILE:-default}"
 
+# Path inside the sandbox where the repo volume and profile volume land.
+# /sandbox is the sandbox user's home in the community base image (#18,
+# verified live) — the profile volume mounts exactly where the agent looks
+# for its config, no environment override required.
+SANDBOX_REPO_DIR="/sandbox/repo"
+SANDBOX_CONFIG_DIR="/sandbox/.claude"
+
 usage() {
   cat >&2 <<'EOF'
 usage: komora [--dry-run] [--cwd DIR] <command> [args...]
 
 commands:
+  run [owner/repo]
+              create or resume the sandbox for a repo and land in the agent
+              (also the default when no command is given)
   ls          list komora sandboxes and volumes
   stop        stop a running sandbox
   rm          remove a sandbox (or, with intent, a volume)
   shell       open a shell in the sandbox instead of the agent
   id [owner/repo]
               resolve and print the repo id and slug this invocation means
-  volumes <slug> [profile]
-              create and prime the repo and profile volumes
 
   --dry-run   print podman/openshell invocations instead of running them
 EOF
@@ -85,25 +93,75 @@ prime_volume() {
     -v "${vol}:/x" "$KOMORA_IMAGE" -c 'touch /x/.keep'
 }
 
-# Creates and primes both persistent volumes for a repo slug + profile name:
-# komora-repo-<slug> (clone + working state) and komora-profile-<name>
-# (credential, MCP OAuth tokens, session history) (#14, #17).
-cmd_volumes() {
-  local slug="${1:?komora: volumes requires a repo slug}"
-  local profile="${2:-$KOMORA_PROFILE}"
-  local repo_vol="komora-repo-${slug}"
-  local profile_vol="komora-profile-${profile}"
+# Creates and primes both persistent volumes for a repo id + slug + profile
+# name, then stages the host credential into the profile volume. Sets the
+# caller's REPO_VOL / PROFILE_VOL / SANDBOX_UID globals rather than printing
+# a return value — plan's dry-run trace already owns stdout here, so a
+# printed return line would be indistinguishable from trace output
+# (#14, #17, #18).
+#
+# The komora.repo label carries the full repo_id (owner/repo), not the
+# slug: check_slug_collision reads it back to tell two different repo_ids
+# that happen to slug identically apart. Storing the slug there instead
+# would make that check compare a slug against itself and never detect a
+# real collision — the bug that shipped with #16/#17 and only surfaced once
+# #18 wired cmd_run's create-then-resume path end to end against this
+# exact label (verified live: a second `komora run arteven/komora` refused
+# itself as a "collision" with its own volume).
+ensure_repo_and_profile_volumes() {
+  local repo_id="$1" slug="$2" profile="$3"
+  REPO_VOL="komora-repo-${slug}"
+  PROFILE_VOL="komora-profile-${profile}"
 
-  local uid; uid="$(resolve_sandbox_uid)"
+  SANDBOX_UID="$(resolve_sandbox_uid)"
 
-  ensure_volume "$repo_vol" --label "komora" --label "komora.repo=${slug}"
-  ensure_volume "$profile_vol" --label "komora" --label "komora.profile=${profile}"
+  ensure_volume "$REPO_VOL" --label "komora" --label "komora.repo=${repo_id}"
+  ensure_volume "$PROFILE_VOL" --label "komora" --label "komora.profile=${profile}"
 
-  prime_volume "$repo_vol" "$uid"
-  prime_volume "$profile_vol" "$uid"
+  prime_volume "$REPO_VOL" "$SANDBOX_UID"
+  prime_volume "$PROFILE_VOL" "$SANDBOX_UID"
+  stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
+}
 
-  echo "repo volume: $repo_vol"
-  echo "profile volume: $profile_vol"
+# Resolves the host's real agent config dir: CLAUDE_CONFIG_DIR if set, else
+# ~/.claude, with symlinks resolved — a symlinked tree would dangle inside
+# the sandbox (#14, #18). Stale credential from the wrong location fails as
+# `401 OAuth access token has been revoked`, an error that points
+# convincingly at the wrong layer.
+host_config_dir() {
+  local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  readlink -f "$dir" 2>/dev/null || printf '%s' "$dir"
+}
+
+# Copies the host's credential into the profile volume, as the sandbox uid,
+# from the host's *resolved* config dir (#14, #18). A copy, not a mount: the
+# sandbox must be able to write it (rotation would wedge on a read-only
+# mount), but must never write back to the host's live credential (#12).
+# Idempotent and safe to re-run: overwrites with whatever the host currently
+# holds, which is what makes profile switches and rotation both work.
+#
+# Runs as container root (host uid, via rootless Podman's userns), not the
+# sandbox uid: the host credential is 0600 owned by the host user, so the
+# sandbox uid — a different uid entirely — cannot read it through the bind
+# mount (verified live: `cp` fails `Permission denied` under --user
+# "$uid:$uid"). Root can read it (rootless root maps to the host's own uid),
+# then chowns the copy to the sandbox uid so the agent can read and rewrite
+# it once mounted into the sandbox.
+stage_credential() {
+  local profile_vol="$1" uid="$2"
+  local host_dir; host_dir="$(host_config_dir)"
+  local cred="$host_dir/.credentials.json"
+
+  if [[ ! -f "$cred" ]]; then
+    echo "komora: no credential found at $cred" >&2
+    echo "  checked CLAUDE_CONFIG_DIR override, falling back to ~/.claude" >&2
+    echo "  log in with the agent CLI on the host first" >&2
+    return 1
+  fi
+
+  plan podman run --rm --user "0:0" --entrypoint sh \
+    -v "${profile_vol}:/x" -v "${cred}:/src/.credentials.json:ro" "$KOMORA_IMAGE" \
+    -c "cp /src/.credentials.json /x/.credentials.json && chown ${uid}:${uid} /x/.credentials.json && chmod 600 /x/.credentials.json"
 }
 
 cmd_stop() {
@@ -171,7 +229,9 @@ check_slug_collision() {
 
 # Resolves the repo id (owner/repo) this invocation means: a positional
 # argument if given, else derived from `git remote get-url origin` (#16).
-cmd_id() {
+# Prints "repo_id slug" on success — the shared seam `cmd_id` and `cmd_run`
+# both build on.
+resolve_repo_id() {
   local repo_id="${1:-}"
 
   if [[ -z "$repo_id" ]]; then
@@ -185,8 +245,103 @@ cmd_id() {
   local slug; slug="$(slugify "$repo_id")"
   check_slug_collision "$repo_id" "$slug" || return 1
 
+  printf '%s %s\n' "$repo_id" "$slug"
+}
+
+cmd_id() {
+  local repo_id slug
+  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+
   echo "repo: $repo_id"
   echo "slug: $slug"
+}
+
+# The sandbox name for a repo slug. Deterministic and profile-independent, so
+# create-or-resume is a name lookup: `openshell sandbox create --name` already
+# refuses a duplicate name (verified live), which is what gives komora the
+# one-live-sandbox-per-repo-volume guarantee (#14, #18) without machinery of
+# its own.
+#
+# `komora-<slug>` would be the readable choice, but OpenShell's server
+# enforces a hard 19-char cap on sandbox (and workspace, and service) names
+# (MAX_ROUTABLE_NAME_LEN, crates/openshell-server/src/grpc/mod.rs) — a limit
+# #14 never accounted for, and one `komora-arteven-komora` already exceeds
+# (verified live: "name exceeds maximum length (21 > 19)"). A short hash of
+# the slug fits comfortably (`komora-` + 10 hex chars = 17) and stays
+# deterministic; the human-readable slug survives as the `komora.slug` label
+# for `sandbox get`/`list` to display instead.
+sandbox_name() {
+  local slug="$1" hash
+  hash="$(printf '%s' "$slug" | sha256sum | cut -c1-10)"
+  printf 'komora-%s' "$hash"
+}
+
+# True (exit 0) if a sandbox by this name already exists, whether Ready,
+# Stopped, or otherwise — `sandbox get` fails with "sandbox not found" only
+# when there is truly nothing there (#18, verified live).
+sandbox_exists() {
+  openshell sandbox get "$1" >/dev/null 2>&1
+}
+
+# The driver-config-json for `openshell sandbox create`: both volumes
+# explicit read_only:false, per the Podman driver default of
+# read_only:true (#14, #18 — the correction verified against
+# crates/openshell-driver-podman/src/container.rs). Compact JSON on one
+# line, since it travels as a single CLI argument.
+driver_config_json() {
+  local repo_vol="$1" profile_vol="$2"
+  printf '{"podman":{"mounts":[{"type":"volume","source":"%s","target":"%s","read_only":false},{"type":"volume","source":"%s","target":"%s","read_only":false}]}}' \
+    "$repo_vol" "$SANDBOX_REPO_DIR" "$profile_vol" "$SANDBOX_CONFIG_DIR"
+}
+
+# The in-sandbox command for a first-time launch: clone the repo into the
+# (primed, empty-but-for-.keep) repo volume, then hand off to the agent.
+# `rm -f .keep` clears the priming marker that would otherwise make `git
+# clone`'s target look non-empty and refuse (#18, verified live).
+launch_command() {
+  local repo_id="$1" dir="$SANDBOX_REPO_DIR"
+  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec claude' \
+    "$dir" "$dir" "$repo_id" "$dir" "$dir"
+}
+
+# Slice 1 (#18): one command lands you in an authenticated agent session.
+# Re-running against the same repo resumes the existing sandbox instead of
+# creating a second one.
+cmd_run() {
+  local repo_id slug
+  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+
+  local name; name="$(sandbox_name "$slug")"
+
+  if sandbox_exists "$name"; then
+    echo "komora: resuming sandbox '$name' for $repo_id" >&2
+    # Restage the credential even on resume: the profile volume is what
+    # makes login once-per-profile rather than once-per-sandbox, but that
+    # only holds if a host-side re-login is reflected into an already-live
+    # sandbox too. Skipping this reproduces the exact misleading
+    # `401 OAuth access token has been revoked` #18 exists to prevent.
+    local PROFILE_VOL SANDBOX_UID
+    PROFILE_VOL="komora-profile-${KOMORA_PROFILE}"
+    SANDBOX_UID="$(resolve_sandbox_uid)"
+    stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
+    # The clone already exists by construction (a sandbox only ever gets
+    # created after cloning), so resuming just lands in it and hands off.
+    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec claude"
+    return
+  fi
+
+  local REPO_VOL PROFILE_VOL SANDBOX_UID
+  ensure_repo_and_profile_volumes "$repo_id" "$slug" "$KOMORA_PROFILE"
+
+  echo "komora: creating sandbox '$name' for $repo_id" >&2
+  # Label values reject '/' (verified live: "label value contains invalid
+  # characters"), which rules out storing the raw owner/repo. The slug is
+  # already label-safe ([a-z0-9-]+) and, combined with the one-sandbox-per-
+  # slug guarantee, is enough to identify the sandbox back to its repo.
+  plan openshell sandbox create --name "$name" \
+    --label "komora=true" --label "komora.slug=${slug}" \
+    --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")" \
+    -- sh -c "$(launch_command "$repo_id")"
 }
 
 main() {
@@ -208,17 +363,24 @@ main() {
   [[ $# -gt 0 ]] && shift || true
 
   case "$command" in
+    run)   cmd_run "$@" ;;
     ls)    cmd_ls "$@" ;;
     stop)  cmd_stop "$@" ;;
     rm)    cmd_rm "$@" ;;
     shell) cmd_shell "$@" ;;
     id)    cmd_id "$@" ;;
-    volumes) cmd_volumes "$@" ;;
-    -h|--help|"") usage; [[ "$command" == "" ]] && exit 2 || exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    "")    cmd_run ;;
     *)
-      echo "komora: unknown command '$command'" >&2
-      usage
-      exit 2
+      # A bare `owner/repo` with no subcommand also means `run` (#18, user
+      # story 1: zero-ceremony launch).
+      if [[ "$command" == */* ]]; then
+        cmd_run "$command" "$@"
+      else
+        echo "komora: unknown command '$command'" >&2
+        usage
+        exit 2
+      fi
       ;;
   esac
 }
