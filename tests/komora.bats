@@ -386,7 +386,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   local cred_dir; cred_dir="$(fake_credential_dir)"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
-  assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME"
+  assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   assert_output --partial "komora.slug=arteven-komora"
   refute_output --partial "sandbox exec"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
@@ -483,4 +483,60 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_failure
   assert_output --partial "collis"
   rm -rf "$os_dir" "$fake_dir"
+}
+
+# --- cmd_shell: same create-or-resume, differing final command (#14, #19) ---
+# `shell` shares launch_into with `run`; these tests focus on what #19 adds —
+# a shell instead of the agent — and lean on the run tests above to already
+# cover the shared volume/priming/staging/collision machinery.
+
+@test "--dry-run shell creates a sandbox with --tty and execs a login shell, not the agent, on first create" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  assert_success
+  assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
+  assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
+  assert_output --partial 'exec\ bash\ -l'
+  refute_output --partial 'exec\ claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run shell resumes via sandbox exec into a login shell, not create, when the sandbox already exists" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  assert_success
+  assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
+  refute_output --partial "sandbox create"
+  refute_output --partial "git clone"
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ bash\ -l'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run shell restages the credential on resume, same as run" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  assert_success
+  refute_output --partial "volume create"
+  refute_output --partial "touch"
+  assert_output --partial 'cp\ /src/.credentials.json\ /x/.credentials.json'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "shell derives owner/repo from the host clone, same as run" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  local dir; dir="$(mktemp -d)"
+  git -C "$dir" init --quiet
+  git -C "$dir" remote add origin git@github.com:arteven/komora.git
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run --cwd "$dir" shell
+  assert_success
+  assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$dir"
 }

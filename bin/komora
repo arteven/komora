@@ -25,7 +25,8 @@ commands:
   ls          list komora sandboxes and volumes
   stop        stop a running sandbox
   rm          remove a sandbox (or, with intent, a volume)
-  shell       open a shell in the sandbox instead of the agent
+  shell [owner/repo]
+              same as run, but open a shell instead of the agent
   id [owner/repo]
               resolve and print the repo id and slug this invocation means
 
@@ -174,9 +175,16 @@ cmd_rm() {
   return 1
 }
 
+# #19: a shell instead of the agent. A sandbox created via `komora shell`
+# and one created via `komora run` are indistinguishable and equally
+# resumable by either subcommand — only the final command differs.
 cmd_shell() {
-  echo "komora: shell not yet implemented" >&2
-  return 1
+  local repo_id slug
+  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+  # -l for a login shell: a bare `exec bash` skips /etc/profile and
+  # ~/.bash_profile, silently dropping whatever PATH/prompt setup the image
+  # provides — the opposite of "feels native" (#19).
+  launch_into "$repo_id" "$slug" "bash -l"
 }
 
 # Parses an `origin` remote URL into owner/repo. Handles both forms git
@@ -295,21 +303,22 @@ driver_config_json() {
 }
 
 # The in-sandbox command for a first-time launch: clone the repo into the
-# (primed, empty-but-for-.keep) repo volume, then hand off to the agent.
-# `rm -f .keep` clears the priming marker that would otherwise make `git
-# clone`'s target look non-empty and refuse (#18, verified live).
+# (primed, empty-but-for-.keep) repo volume, then hand off to whatever final
+# command the caller wants running (the agent, or a shell — #19). `rm -f
+# .keep` clears the priming marker that would otherwise make `git clone`'s
+# target look non-empty and refuse (#18, verified live).
 launch_command() {
-  local repo_id="$1" dir="$SANDBOX_REPO_DIR"
-  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec claude' \
-    "$dir" "$dir" "$repo_id" "$dir" "$dir"
+  local repo_id="$1" final="$2" dir="$SANDBOX_REPO_DIR"
+  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec %s' \
+    "$dir" "$dir" "$repo_id" "$dir" "$dir" "$final"
 }
 
-# Slice 1 (#18): one command lands you in an authenticated agent session.
-# Re-running against the same repo resumes the existing sandbox instead of
-# creating a second one.
-cmd_run() {
-  local repo_id slug
-  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+# Shared create-or-resume path for both cmd_run and cmd_shell (#14, #18,
+# #19). The agent and a shell need identical volumes, priming, staging, and
+# collision handling — only the final command exec'd inside the sandbox
+# varies, so that's the one thing parameterized here.
+launch_into() {
+  local repo_id="$1" slug="$2" final="$3"
 
   local name; name="$(sandbox_name "$slug")"
 
@@ -326,7 +335,7 @@ cmd_run() {
     stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
     # The clone already exists by construction (a sandbox only ever gets
     # created after cloning), so resuming just lands in it and hands off.
-    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec claude"
+    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec $final"
     return
   fi
 
@@ -338,10 +347,24 @@ cmd_run() {
   # characters"), which rules out storing the raw owner/repo. The slug is
   # already label-safe ([a-z0-9-]+) and, combined with the one-sandbox-per-
   # slug guarantee, is enough to identify the sandbox back to its repo.
-  plan openshell sandbox create --name "$name" \
+  #
+  # --tty forces a PTY rather than relying on create's auto-detection, to
+  # match sandbox exec's forced --tty on the resume path above (#19) — full
+  # terminal fidelity (resize, Ctrl-C, truecolor) should not depend on
+  # whether stdin happens to look like a terminal on first launch.
+  plan openshell sandbox create --name "$name" --tty \
     --label "komora=true" --label "komora.slug=${slug}" \
     --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")" \
-    -- sh -c "$(launch_command "$repo_id")"
+    -- sh -c "$(launch_command "$repo_id" "$final")"
+}
+
+# Slice 1 (#18): one command lands you in an authenticated agent session.
+# Re-running against the same repo resumes the existing sandbox instead of
+# creating a second one.
+cmd_run() {
+  local repo_id slug
+  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+  launch_into "$repo_id" "$slug" "claude"
 }
 
 main() {
