@@ -1,10 +1,18 @@
-# INVESTIGATION — sandbox lifecycle failure modes
+# INVESTIGATION — chamber lifecycle failure modes
 
 Not a prototype: a written record for [#21](https://github.com/arteven/komora/issues/21),
 following the criteria-and-observed-results precedent of the walking skeleton
 ([#6](https://github.com/arteven/komora/issues/6),
 `prototype/walking-skeleton/README.md`). No code changes came out of this —
 its output is the table below, feeding directly into `ls`/`stop`/`rm` (#24).
+
+**Terminology note.** CONTEXT.md reserves "chamber" for komora's own concept
+and avoids "sandbox" as a synonym for it. Since #14, `sandbox` is *also* a
+literal OpenShell noun — `openshell sandbox create`, the `Provisioning`/
+`Ready` phase names — and those uses below are the vendor's own vocabulary,
+left as-is. Everywhere else this doc means komora's chamber, it says
+"chamber". The glossary has no entry yet reconciling the two; that's a gap
+for `/domain-modeling`, not resolved here.
 
 Environment tested: `openshell 0.0.93`, `podman 6.0.1`, Linux 6.12,
 `ghcr.io/nvidia/openshell-community/sandboxes/base:latest` (image digest
@@ -26,9 +34,9 @@ Inspected resulting state with `openshell sandbox list|get -o yaml|json` and
 | Criterion | Observed result |
 | --- | --- |
 | 1. Interrupt during image pull, during provisioning, after container start — record state each time | See Findings 2–4 below; all three reproduced |
-| 2. Can a partially-created sandbox leave primed volumes with no sandbox referencing them? | **No**, for the `komora` wrapper specifically: it creates and primes both volumes *before* calling `openshell sandbox create` (Finding 1), and priming (`podman run ... touch .keep`) is a synchronous local command — killing `komora` never leaves it mid-write. The volume-orphan risk sits entirely on the "does a sandbox now exist that isn't referenced anywhere" question, not on Podman-level partial writes. |
-| 3. Can an interrupted create hold a sandbox name against reuse, and how to recover? | **Yes, confirmed twice.** Killing the local CLI within roughly the first second of `sandbox create` leaves a sandbox record permanently stuck in `Provisioning` — no container, no further progress, ever (waited 60s+; server does not retry or time it out). The name is held: a second `create` with the same `--name` fails `sandbox 'X' already exists`. Recovery: `openshell sandbox delete <name>` frees it — see Finding 5 for a message quirk on this path. |
-| 4. What can komora observe to distinguish an orphan from a stopped-but-intact sandbox's volume? | **Nothing conclusive from Podman/OpenShell state alone.** See Finding 6 — this criterion is only partially resolved. |
+| 2. Can a partially-created chamber leave primed volumes with no chamber referencing them? | **No**, for the `komora` wrapper specifically: it creates and primes both volumes *before* calling `openshell sandbox create` (Finding 1), and priming (`podman run ... touch .keep`) is a synchronous local command — killing `komora` never leaves it mid-write. The volume-orphan risk sits entirely on the "does an OpenShell sandbox record now exist that isn't referenced anywhere" question, not on Podman-level partial writes. |
+| 3. Can an interrupted create hold a chamber's name against reuse, and how to recover? | **Yes, confirmed twice.** Killing the local CLI within roughly the first second of `sandbox create` leaves an OpenShell sandbox record permanently stuck in `Provisioning` — no container, no further progress, ever (waited 60s+; server does not retry or time it out). The name is held: a second `create` with the same `--name` fails `sandbox 'X' already exists`. Recovery: `openshell sandbox delete <name>` frees it — see Finding 5 for a message quirk on this path. |
+| 4. What can komora observe to distinguish an orphan from a stopped-but-intact chamber's volume? | **Nothing conclusive from Podman/OpenShell state alone.** See Finding 6 — this criterion is only partially resolved. |
 | 5. Record findings as a table, naming versions tested | This document |
 | 6. State plainly what's confirmed vs. unexplained | See "Confirmed" / "Unresolved" below |
 
@@ -92,36 +100,36 @@ upstream or at least not trusting literally in `komora rm`'s own success
 reporting — check `sandbox list` after, not the message.
 
 **6. No reliable signal distinguishes an orphaned volume from one belonging
-to a stopped-but-intact sandbox.** `openshell sandbox delete` never removes
+to a stopped-but-intact chamber.** `openshell sandbox delete` never removes
 `komora`'s volumes (by design — volume removal is `komora rm`'s job, with
 deliberately higher intent required, per #14). So after any `sandbox
-delete`, the repo and profile volumes remain, unreferenced by any sandbox —
+delete`, the repo and profile volumes remain, unreferenced by any chamber —
 identical in every observable respect to a volume left behind by a create
 that got stuck in `Provisioning` and was then deleted. Checked:
   - `podman volume inspect --format .MountCount` stays `0` even while a
-    sandbox is actively `Ready` and mounting the volume (OpenShell's Podman
+    chamber is actively `Ready` and mounting the volume (OpenShell's Podman
     driver goes through the Podman API, not the `podman` CLI's mount
     accounting) — not a usable liveness signal.
   - `openshell sandbox list -o json` exposes each sandbox's `labels`
     (including `komora.slug`), which can be cross-referenced against a
-    volume's `komora.repo`/slug — but this only tells you "no sandbox
+    volume's `komora.repo`/slug — but this only tells you "no chamber
     currently references this volume," which is true for both an orphan and
     an intentionally-idle repo volume between sessions. Volumes are meant to
-    outlive sandboxes (#14's whole point), so "unreferenced" cannot mean
+    outlive chambers (#14's whole point), so "unreferenced" cannot mean
     "orphaned" on its own.
   - There is no `openshell sandbox stop` subcommand — only `create` /
     `delete` / `exec` / `connect` / `upload` / `download` / `ssh-config` /
     `provider`. `komora stop`'s planned semantics (#7's roadmap, #24) may
     need to mean "stop the underlying container via `podman stop`" directly,
-    since OpenShell exposes no sandbox-level stop of its own. Worth
+    since OpenShell exposes no chamber-level stop of its own. Worth
     confirming before designing `cmd_stop`.
 
 ## Confirmed
 
 - The two failure modes #14 flagged are one boundary, not two bugs (Finding 4).
-- A sandbox interrupted early enough leaves no container and a permanently
+- A chamber interrupted early enough leaves no container and a permanently
   stuck `Provisioning` record that holds its name (Finding 2).
-- A sandbox interrupted late enough is unaffected — it completes normally
+- A chamber interrupted late enough is unaffected — it completes normally
   server-side regardless of the local client (Finding 3).
 - Volumes are never left mid-write by `komora`'s own priming, because that
   step fully precedes and is independent of `openshell sandbox create`
@@ -133,8 +141,8 @@ that got stuck in `Provisioning` and was then deleted. Checked:
 
 - **No mechanical way to tell an orphaned volume from an intact one.**
   (Finding 6) A cleanup command can enumerate volumes with no matching live
-  sandbox, but cannot know whether that's because create failed midway or
-  because the developer simply isn't running a sandbox right now — both are
+  chamber, but cannot know whether that's because create failed midway or
+  because the developer simply isn't running a chamber right now — both are
   the same observable state. This is not a gap in this investigation; it
   appears to be a real absence of a signal in the current Podman/OpenShell
   surface. `ls`/`rm` (#24) may need to treat *all* unreferenced `komora`
