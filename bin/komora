@@ -78,6 +78,7 @@ parse_remote_url() {
     *) return 1 ;;
   esac
   path="${path%.git}"
+  path="${path%/}"
   [[ "$path" == */* ]] || return 1
   printf '%s' "$path"
 }
@@ -102,7 +103,7 @@ existing_volume_repo() {
 # same volume name would otherwise silently share one repo volume (#14, #16).
 check_slug_collision() {
   local repo_id="$1" slug="$2"
-  local vol="komora-${slug}"
+  local vol="komora-repo-${slug}"
   local existing; existing="$(existing_volume_repo "$vol")"
 
   if [[ -n "$existing" && "$existing" != "$repo_id" ]]; then
@@ -139,7 +140,9 @@ main() {
     case "$1" in
       --dry-run) KOMORA_DRY_RUN=1; shift ;;
       --source-only) return 0 ;;
-      --cwd) KOMORA_CWD="$2"; shift 2 ;;
+      --cwd)
+        [[ $# -ge 2 ]] || { echo "komora: --cwd requires a directory argument" >&2; exit 2; }
+        KOMORA_CWD="$2"; shift 2 ;;
       *) args+=("$1"); shift ;;
     esac
   done
