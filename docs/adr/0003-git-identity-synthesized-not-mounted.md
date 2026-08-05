@@ -32,6 +32,64 @@ Under [ADR-0001](0001-arch-base-image-recreatable-not-reproducible.md), a
 mounted config is also not **irreplaceable** — it regenerates from its sources
 trivially — so the disposability constraint gives no reason to mount either.
 
+## Amendment (2026-08-05, #27): explicit-only, warn-never-block, and where it lives
+
+The clone-inside architecture ([#14](https://github.com/arteven/komora/issues/14))
+and the auth-inside-the-chamber decision ([#30](https://github.com/arteven/komora/issues/30))
+withdrew this ADR's host-facing parts. What is **current** is here; the sections
+below are kept for the reasoning, with the superseded ones marked. This is the
+same "append a correction, don't rewrite history" discipline the map uses.
+
+1. **§1 (synthesize, never mount) and §2 (regenerated every start) stand
+   unchanged** — and are now *load-bearing*, since a chamber that mounted the
+   host `~/.gitconfig` is structurally impossible under clone-inside anyway.
+   Verified live (#27): a commit inside a real chamber carries the configured
+   identity, read via `GIT_CONFIG_GLOBAL`.
+
+2. **§3 (host fallback) is withdrawn.** Identity comes from komora's own config
+   and **nowhere else**. There is no read-through to the host global or the repo
+   local. Deriving identity from the host is the same category of mistake as
+   deriving the *credential* from the host, which #30 removed wholesale — it
+   reintroduces exactly the host-bound coupling §1 exists to prevent. An unset
+   identity is **unset**, not inherited. This makes the prototype's `resolve_git`
+   precedence chain moot: there is no chain left, only a single source.
+
+3. **§5 (warn-and-confirm) becomes warn-only.** A chamber with no identity
+   **still starts**; komora prints an actionable warning (naming both
+   `komora git config` commands) and hands off. A confirmation prompt on the
+   daily launch path is the ceremony the zero-ceremony Must exists to prevent
+   ("warn, never block, on the daily launch path"). The §5 requirement for a
+   non-interactive pre-confirm flag (`KOMORA_ASSUME_YES`) is therefore **dropped
+   for this path** — there is no prompt to skip.
+
+4. **§4's surface is narrowed to identity.** `komora git config` manages
+   `user.name` and `user.email` only — komora's config is not a general git
+   config store. The seeded `init.defaultBranch` and the arbitrary-key escape
+   hatch are not built; add them back only if a real need appears.
+
+5. **Where komora's own config lives (new decision this ADR now records).**
+   komora keeps its own global config at
+   `${XDG_CONFIG_HOME:-$HOME/.config}/komora/config`, INI-shaped in git's
+   vocabulary so `git config --file` is its reader/writer. This is the first
+   komora-owned config file, sized to hold more later (#22's PAT wants to sit
+   beside the identity).
+
+6. **Where the identity lands *inside* the chamber (the substantive question
+   #27 answered).** The sandbox home is `/sandbox`; the repo volume mounts at
+   `/sandbox/repo` and the profile volume at `/sandbox/.claude`, so **neither**
+   covers `/sandbox/.gitconfig`. Rather than add a third mount for one file,
+   komora writes the identity into the **profile volume**
+   (`/sandbox/.claude/gitconfig`) and points git at it with `GIT_CONFIG_GLOBAL`,
+   which git honours ahead of `~/.gitconfig` regardless of `HOME`. Identity
+   therefore travels with the profile volume — the same volume the credential
+   lives in — and survives a resume, since that volume outlives the sandbox. The
+   fresh-every-start write (§2) is a shell fragment prepended to the in-chamber
+   command on **both** the create and resume paths, alongside the
+   `CLAUDE_CONFIG_DIR` override it shares a rationale with.
+
+7. **§6 (per-profile override) stays deferred** as map fog — identity is global
+   for now. §7 (signing declined) stands unchanged.
+
 ## Decision
 
 ### 1. Synthesize, never mount
