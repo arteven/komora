@@ -140,7 +140,8 @@ prime_volume() {
 }
 
 # Creates and primes both persistent volumes for a repo id + slug + profile
-# name, then stages the host credential into the profile volume. Sets the
+# name. The profile volume is primed but never seeded with a credential —
+# login happens inside the chamber, not staged from the host (#30). Sets the
 # caller's REPO_VOL / PROFILE_VOL / SANDBOX_UID globals rather than printing
 # a return value — plan's dry-run trace already owns stdout here, so a
 # printed return line would be indistinguishable from trace output
