@@ -274,6 +274,23 @@ fake_credential_dir() {
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
+@test "--dry-run run stages no credential on create — login happens inside the chamber (#30)" {
+  # komora derives no agent credential from the host: the profile volume is
+  # primed but never seeded with .credentials.json, and no code path reads the
+  # host's config dir. A fresh profile mounts empty and the agent prompts for
+  # login inside.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  # Point CLAUDE_CONFIG_DIR at a host dir that DOES hold a credential; nothing
+  # should read it. If host derivation crept back in, this would leak here.
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial ".credentials.json"
+  refute_output --partial "$cred_dir"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
 @test "--dry-run run defaults the profile to 'default' when KOMORA_PROFILE is unset" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
@@ -297,43 +314,12 @@ fake_credential_dir() {
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-# --- Credential staging (#14, #18) ---
-
-@test "--dry-run run fails clearly when no credential exists at the resolved config dir" {
-  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
-  local pm_dir; pm_dir="$(fake_podman_priming "998")"
-  local empty_dir; empty_dir="$(mktemp -d)"
-  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$empty_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
-  assert_failure
-  assert_output --partial "no credential found"
-  assert_output --partial "$empty_dir"
-  rm -rf "$os_dir" "$pm_dir" "$empty_dir"
-}
-
-@test "--dry-run run stages the credential from an overridden CLAUDE_CONFIG_DIR, not the default" {
-  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
-  local pm_dir; pm_dir="$(fake_podman_priming "998")"
-  local cred_dir; cred_dir="$(fake_credential_dir)"
-  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
-  assert_success
-  assert_output --partial "$cred_dir/.credentials.json"
-  assert_output --partial 'cp\ /src/.credentials.json\ /x/.credentials.json'
-  refute_output --partial "$HOME/.claude/.credentials.json"
-  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
-}
-
-@test "--dry-run run resolves a symlinked CLAUDE_CONFIG_DIR before staging" {
-  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
-  local pm_dir; pm_dir="$(fake_podman_priming "998")"
-  local real_dir; real_dir="$(fake_credential_dir)"
-  local link_dir; link_dir="$(mktemp -u)"
-  ln -s "$real_dir" "$link_dir"
-  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$link_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
-  assert_success
-  assert_output --partial "$real_dir/.credentials.json"
-  refute_output --partial "$link_dir/.credentials.json"
-  rm -rf "$os_dir" "$pm_dir" "$real_dir" "$link_dir"
-}
+# komora stages no credential from the host (#30): the profile volume starts
+# empty and the developer logs in *inside* the chamber. The tests that asserted
+# on host staging — resolving CLAUDE_CONFIG_DIR, copying .credentials.json,
+# failing when the host had none — were removed with the behaviour, not adapted.
+# What guards the removal is a positive assertion that neither create nor resume
+# ever copies a credential (see the create and resume tests below).
 
 # --- cmd_run: create-or-resume (#14, #18) ---
 # A fake `openshell` stands in for the real binary. `sandbox get <name>`
@@ -438,19 +424,19 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "--dry-run run resume skips volume creation and priming, but still restages the credential" {
-  # Regression for a live-reproducible bug: skipping credential staging on
-  # resume serves a stale token after a host-side re-login, reproducing the
-  # exact "401 OAuth access token has been revoked" #18 exists to prevent.
+@test "--dry-run run resume skips volume creation and priming, and stages no credential" {
+  # #30: the credential lives in the profile volume, written by an in-chamber
+  # login; the volume outlives the sandbox, so a resume has nothing to stage.
+  # This is the positive guard that host staging is gone from the resume path —
+  # its previous incarnation asserted the opposite (restaging on resume).
   local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
-  local cred_dir; cred_dir="$(fake_credential_dir)"
-  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  PATH="$os_dir:$pm_dir:$PATH" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   refute_output --partial "volume create"
   refute_output --partial "touch"
-  assert_output --partial 'cp\ /src/.credentials.json\ /x/.credentials.json'
-  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+  refute_output --partial ".credentials.json"
+  rm -rf "$os_dir" "$pm_dir"
 }
 
 @test "run with a bare owner/repo argument (no subcommand) also means run" {
@@ -730,16 +716,15 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "--dry-run shell restages the credential on resume, same as run" {
+@test "--dry-run shell stages no credential on resume, same as run (#30)" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
-  local cred_dir; cred_dir="$(fake_credential_dir)"
-  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  PATH="$os_dir:$pm_dir:$PATH" run "$KOMORA_BIN" --dry-run shell arteven/komora
   assert_success
   refute_output --partial "volume create"
   refute_output --partial "touch"
-  assert_output --partial 'cp\ /src/.credentials.json\ /x/.credentials.json'
-  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+  refute_output --partial ".credentials.json"
+  rm -rf "$os_dir" "$pm_dir"
 }
 
 @test "shell derives owner/repo from the host clone, same as run" {
