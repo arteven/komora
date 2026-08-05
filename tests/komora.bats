@@ -9,6 +9,7 @@ setup() {
   load '/usr/lib/bats/bats-support/load'
   load '/usr/lib/bats/bats-assert/load'
   KOMORA_BIN="${BATS_TEST_DIRNAME}/../bin/komora"
+  KOMORA_ROOT="${BATS_TEST_DIRNAME}/.."
 }
 
 @test "rejects an unknown command with a usage message and exit 2" {
@@ -411,7 +412,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ claude'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -433,7 +434,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ claude'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -485,6 +486,157 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$fake_dir"
 }
 
+# --- CLAUDE_CONFIG_DIR: keeping the account binding in the volume (#29) ---
+# Claude Code splits its state across ~/.claude/ (inside the mount) and
+# ~/.claude.json (a *sibling* of it, holding oauthAccount and userID). Without
+# the override the latter lives in the container's ephemeral layer, so
+# destroying a sandbox loses the account binding while leaving the credential
+# valid — a fresh chamber then authenticates but shows onboarding.
+
+@test "run sets CLAUDE_CONFIG_DIR to the profile mount on create" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run sets CLAUDE_CONFIG_DIR on resume too, not only on create" {
+  # The resume path execs its own command, so it needs the override
+  # independently — a create-only fix would lose the binding on every
+  # subsequent launch.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "sandbox exec"
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "shell sets CLAUDE_CONFIG_DIR as well, so an agent started by hand inside finds its config" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  assert_success
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+# --- the egress policy komora owns (#29) ---
+# komora passes --policy on every create. The load-bearing property is that it
+# passes it *at all*: without it, a chamber silently inherits whatever the base
+# image ships, so an image update can change komora's security posture without
+# anyone deciding to. `--policy` fully REPLACES the built-in default rather than
+# merging (verified against openshell 0.0.93), which is why the shipped file
+# carries the whole base policy and not a delta.
+
+@test "--dry-run run passes --policy on create, pointing at the policy komora ships" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "--policy"
+  assert_output --partial "policy/policy.yaml"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the policy path resolves relative to the script, not the cwd" {
+  # komora is launched from whatever repo you happen to be in, so a
+  # cwd-relative policy path would resolve to nothing on nearly every real
+  # invocation — and, without the refusal below, silently fall back to the
+  # image default.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  local elsewhere; elsewhere="$(mktemp -d)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    run env -C "$elsewhere" "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "--policy"
+  refute_output --partial "$elsewhere/policy"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$elsewhere"
+}
+
+@test "KOMORA_POLICY overrides the shipped policy path" {
+  # This is what makes the policy testable — iterate against a candidate file
+  # without editing the shipped one.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  local custom; custom="$(mktemp -d)/custom-policy.yaml"
+  printf 'version: 1\n' > "$custom"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" KOMORA_POLICY="$custom" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "$custom"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$(dirname "$custom")"
+}
+
+@test "run refuses to create a sandbox when the policy file is missing, rather than inheriting the image default" {
+  # Falling back to the image's default policy would present as a working
+  # chamber on a weaker posture than komora committed to — the one failure
+  # mode owning a policy file exists to prevent.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    KOMORA_POLICY="/nonexistent/policy.yaml" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_failure
+  assert_output --partial "policy file not found"
+  refute_output --partial "sandbox create"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the shipped policy carries the whole base policy, not a delta" {
+  # `--policy` replaces rather than merges, so a delta-only file would strip
+  # every default entry — presenting as a broken chamber (agent cannot reach
+  # Anthropic, git cannot clone) rather than as a policy mistake.
+  local policy="$KOMORA_ROOT/policy/policy.yaml"
+  [ -f "$policy" ]
+  # every network policy the base image ships, verified present
+  for np in claude_code github_ssh_over_https github_rest_api copilot pypi \
+            codex opencode cursor vscode nvidia_inference; do
+    grep -q "^  ${np}:" "$policy" || { echo "missing network policy: $np" >&2; return 1; }
+  done
+}
+
+@test "the shipped policy enables git-receive-pack for git push" {
+  local policy="$KOMORA_ROOT/policy/policy.yaml"
+  # present as a live rule, not as the commented-out block upstream ships
+  grep -q '^ *- allow:' "$policy"
+  run grep -A1 'path: "/\*\*/git-receive-pack"' "$policy"
+  assert_success
+  refute_output --partial "#"
+}
+
+@test "the shipped policy loosens nothing else: no wildcard hosts, no added access: full" {
+  local policy="$KOMORA_ROOT/policy/policy.yaml"
+  # a wildcard host would defeat the default-deny proxy entirely
+  run grep -nE 'host: *["'"'"']?\*' "$policy"
+  assert_failure
+  # api.anthropic.com is the only `access: full` the base ships; komora adds none
+  run bash -c "grep -c 'access: full' '$policy'"
+  assert_output "1"
+}
+
+@test "the shipped policy widens no binary allowlist beyond the base image's" {
+  # The binary allowlist is a meaningful part of the containment: the policy
+  # gates (binary, endpoint) pairs, so widening it is a real loosening even
+  # when no host is added (#29).
+  # Counts binary list entries only (`- path:` / `- { path:`), so the
+  # provenance header's example paths in comments don't inflate it.
+  local policy="$KOMORA_ROOT/policy/policy.yaml"
+  run bash -c "grep -cE '^ *- \{? *path: ' '$policy'"
+  assert_output "31"
+}
+
 # --- cmd_shell: same create-or-resume, differing final command (#14, #19) ---
 # `shell` shares launch_into with `run`; these tests focus on what #19 adds —
 # a shell instead of the agent — and lean on the run tests above to already
@@ -498,8 +650,10 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_success
   assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ bash\ -l'
-  refute_output --partial 'exec\ claude'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
+  # the agent is not the final command — matched with the env prefix so
+  # CLAUDE_CONFIG_DIR's own "claude" substring can't satisfy it
+  refute_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -512,7 +666,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   refute_output --partial "sandbox create"
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ bash\ -l'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
