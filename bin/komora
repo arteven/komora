@@ -93,6 +93,9 @@ commands:
   rm          remove a sandbox (or, with intent, a volume)
   shell [owner/repo]
               same as run, but open a shell instead of the agent
+  forward PORT[:LOCAL] [owner/repo]
+              reach a dev server running inside the chamber from the host
+              browser; runs in the foreground until interrupted
   id [owner/repo]
               resolve and print the repo id and slug this invocation means
   git config [user.name|user.email [value]]
@@ -415,6 +418,131 @@ cmd_shell() {
   # ~/.bash_profile, silently dropping whatever PATH/prompt setup the image
   # provides — the opposite of "feels native" (#19).
   launch_into "$repo_id" "$slug" "bash -l"
+}
+
+# --- dev-server reachability (#23) ---
+#
+# A dev server started inside the chamber is reachable from the host browser.
+# This is the Should-tier fidelity row, and the last one komora wires.
+#
+# WHICH MECHANISM, and why not the one the ticket named. OpenShell offers three,
+# and they are not interchangeable (all verified live against 0.0.93):
+#
+#   - `sandbox create --forward` — create-time only, and documented as "keeps
+#     the sandbox alive". komora's chambers are long-lived and resumed daily, so
+#     a forward bolted to create is unreachable for the whole life of an already-
+#     running chamber. It would also force the developer to know, at create time,
+#     which port a dev server they have not written yet will listen on. Rejected.
+#
+#   - `forward start PORT [NAME]` — NOT gRPC: it shells out to `ssh -L` through
+#     `openshell ssh-proxy` (observed in the process table). It binds
+#     local==remote (`-L 127.0.0.1:P:127.0.0.1:P`), so it cannot resolve a host
+#     port clash by moving the local side, and its `-d/--background` flag did not
+#     detach — the invocation hung past two minutes with no output. Rejected on
+#     both counts.
+#
+#   - `forward service --target-port N --local M [NAME]` — the gRPC path, and the
+#     only one that attaches to an already-running, *idle* sandbox with no exec
+#     session attached (verified: a python http.server inside a sandbox served a
+#     real page to a host curl on a different local port). It splits target from
+#     local, so a host clash is resolvable, and `--local 0` asks the OS for a free
+#     port. This is what komora wraps.
+#
+# WHY A SEPARATE FOREGROUND COMMAND rather than folding forwarding into `run`.
+# `forward service` has no background flag (`forward start` has one; this one
+# does not — verified in both help texts). It holds the terminal for the life of
+# the forward. `komora run` already spends the terminal on the agent's TTY, so
+# the two cannot share one invocation: komora would have to daemonise a child it
+# does not supervise, invent a pidfile, and clean it up on a crash — machinery
+# this architecture exists to avoid ("prefer OpenShell's own mechanism"). A
+# second terminal running `komora forward 5173` is the honest shape, and it is
+# how `kubectl port-forward` and `ssh -L` are already used daily.
+#
+# The forward is therefore tied to the terminal, not the sandbox: Ctrl-C ends it,
+# and there is nothing left behind to leak. A chamber that goes away takes its
+# forwards with it, since the gRPC stream simply ends.
+
+# Parses komora's PORT[:LOCAL] argument into "target local".
+#
+# The common case is a bare `5173`, which forwards the in-chamber port to the
+# same port on the host — the number the developer already has in their head
+# from the dev server's own output, so nothing is hand-managed. `5173:5174`
+# moves the host side when 5173 is taken, and `5173:0` asks the OS for any free
+# port. Rejects anything non-numeric rather than passing it through to OpenShell,
+# so a typo is a komora-voiced error instead of a gRPC one.
+parse_forward_spec() {
+  local spec="$1" target local_port
+  target="${spec%%:*}"
+  if [[ "$spec" == *:* ]]; then local_port="${spec#*:}"; else local_port="$target"; fi
+
+  [[ "$target" =~ ^[0-9]+$ && "$target" -ge 1 && "$target" -le 65535 ]] || {
+    echo "komora: '$target' is not a port number" >&2
+    echo "  usage: komora forward PORT[:LOCAL]  (e.g. 5173, or 5173:5174 to move the host side)" >&2
+    return 1
+  }
+  # 0 is legal on the local side only — it means "any free port" to the OS, and
+  # is meaningless as a target.
+  [[ "$local_port" =~ ^[0-9]+$ && "$local_port" -ge 0 && "$local_port" -le 65535 ]] || {
+    echo "komora: '$local_port' is not a port number" >&2
+    echo "  the part after ':' is the HOST port (0 for any free port)" >&2
+    return 1
+  }
+
+  printf '%s %s\n' "$target" "$local_port"
+}
+
+# `komora forward PORT[:LOCAL] [owner/repo]` — reach a dev server inside the
+# chamber from the host browser (#23).
+#
+# Unlike run/shell this does NOT create a sandbox: forwarding to a chamber that
+# does not exist is a mistake, not a reason to build one. Creating here would
+# also be actively wrong — a fresh chamber has no dev server running, so komora
+# would hand back a forward to nothing after a slow create. So an absent sandbox
+# is an actionable refusal pointing at `komora run`.
+cmd_forward() {
+  local spec="${1:-}"
+  [[ -n "$spec" ]] || {
+    echo "komora: forward needs a port" >&2
+    echo "  usage: komora forward PORT[:LOCAL] [owner/repo]" >&2
+    echo "  e.g.   komora forward 5173        # in-chamber 5173 -> host 5173" >&2
+    echo "         komora forward 5173:5174   # move the host side if 5173 is taken" >&2
+    echo "         komora forward 5173:0      # let the OS pick a free host port" >&2
+    return 2
+  }
+  shift
+
+  local target local_port
+  read -r target local_port < <(parse_forward_spec "$spec") || return 1
+
+  local repo_id slug
+  read -r repo_id slug < <(resolve_repo_id "${1:-}") || return 1
+
+  gateway_preflight || return 1
+
+  local name; name="$(sandbox_name "$slug")"
+
+  # Refuse rather than create — see the header above.
+  if [[ "$KOMORA_DRY_RUN" -ne 1 ]] && ! sandbox_exists "$name"; then
+    echo "komora: no chamber for $repo_id to forward from" >&2
+    echo "  start one first, then forward from a second terminal:" >&2
+    echo "    komora run $repo_id" >&2
+    return 1
+  fi
+
+  # Say where to point the browser before handing the terminal to OpenShell,
+  # which reports the bind in its own voice but not as a URL. Suppressed for a
+  # dynamic port, where the real number is not known until OpenShell prints it.
+  if [[ "$local_port" == "0" ]]; then
+    echo "komora: forwarding in-chamber port $target to a free host port (see the line below)" >&2
+  else
+    echo "komora: forwarding in-chamber port $target -> http://127.0.0.1:${local_port}" >&2
+  fi
+  echo "  the chamber must already be serving on $target; Ctrl-C ends the forward" >&2
+
+  # Foreground on purpose: `forward service` has no background flag, and the
+  # forward's lifetime is this terminal's (see the header). plan() keeps it on
+  # the dry-run seam like every other external invocation (#15).
+  plan openshell forward service "$name" --target-port "$target" --local "$local_port"
 }
 
 # Parses an `origin` remote URL into owner/repo. Handles both forms git
@@ -1119,6 +1247,7 @@ main() {
     stop)  cmd_stop "$@" ;;
     rm)    cmd_rm "$@" ;;
     shell) cmd_shell "$@" ;;
+    forward|fwd) cmd_forward "$@" ;;
     id)    cmd_id "$@" ;;
     git)   cmd_git "$@" ;;
     -h|--help) usage; exit 0 ;;

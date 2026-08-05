@@ -1194,3 +1194,121 @@ GITCONFIG
   refute_output --partial "host-leak@example.com"
   rm -rf "$home_dir" "$os_dir" "$pm_dir" "$cred_dir"
 }
+
+# --- dev-server reachability: `komora forward` (#23) ---
+# komora wraps `openshell forward service` — the gRPC forward that attaches to an
+# already-running sandbox and splits target from local — not `--forward` (create-
+# time only) or `forward start` (ssh -L, binds local==remote, -d does not
+# detach). See cmd_forward's header in bin/komora for the live evidence.
+
+@test "forward wraps 'openshell forward service' against the repo's sandbox" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 5173 arteven/komora
+  assert_success
+  assert_line "openshell forward service $ARTEVEN_KOMORA_SANDBOX_NAME --target-port 5173 --local 5173"
+  rm -rf "$os_dir"
+}
+
+@test "forward does NOT use --forward or 'forward start', the two rejected mechanisms" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 5173 arteven/komora
+  assert_success
+  refute_output --partial "forward start"
+  refute_output --partial "sandbox create"
+  refute_output --partial -- "--forward"
+  rm -rf "$os_dir"
+}
+
+@test "forward defaults the host port to the in-chamber port, so nothing is hand-managed" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 3000 arteven/komora
+  assert_success
+  assert_line "openshell forward service $ARTEVEN_KOMORA_SANDBOX_NAME --target-port 3000 --local 3000"
+  rm -rf "$os_dir"
+}
+
+@test "forward PORT:LOCAL moves the host side, the escape hatch for a taken port" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 5173:5174 arteven/komora
+  assert_success
+  assert_line "openshell forward service $ARTEVEN_KOMORA_SANDBOX_NAME --target-port 5173 --local 5174"
+  rm -rf "$os_dir"
+}
+
+@test "forward PORT:0 asks the OS for a free host port" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 8080:0 arteven/komora
+  assert_success
+  assert_line "openshell forward service $ARTEVEN_KOMORA_SANDBOX_NAME --target-port 8080 --local 0"
+  rm -rf "$os_dir"
+}
+
+@test "forward announces the URL to point the browser at" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 5173 arteven/komora
+  assert_success
+  assert_output --partial "http://127.0.0.1:5173"
+  rm -rf "$os_dir"
+}
+
+@test "forward with no port fails with an actionable usage message, not a crash" {
+  run "$KOMORA_BIN" --dry-run forward
+  assert_failure 2
+  assert_output --partial "forward needs a port"
+  assert_output --partial "PORT[:LOCAL]"
+  refute_output --partial "unbound variable"
+}
+
+@test "forward rejects a non-numeric port in komora's own voice" {
+  run "$KOMORA_BIN" --dry-run forward not-a-port arteven/komora
+  assert_failure
+  assert_output --partial "is not a port number"
+  refute_output --partial "forward service"
+}
+
+@test "forward rejects an out-of-range port" {
+  run "$KOMORA_BIN" --dry-run forward 70000 arteven/komora
+  assert_failure
+  assert_output --partial "is not a port number"
+  refute_output --partial "forward service"
+}
+
+@test "forward refuses when no chamber exists, pointing at komora run rather than creating one" {
+  # not a dry run: the refusal is a live-path guard (a dry run plans the
+  # invocation without asserting the sandbox is there)
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"   # no existing sandbox
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" forward 5173 arteven/komora
+  assert_failure
+  assert_output --partial "no chamber for arteven/komora"
+  assert_output --partial "komora run arteven/komora"
+  refute_output --partial "sandbox create"
+  rm -rf "$os_dir"
+}
+
+@test "forward derives owner/repo from the host clone, same as run and shell" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local dir; dir="$(mktemp -d)"
+  git -C "$dir" init --quiet
+  git -C "$dir" remote add origin git@github.com:arteven/komora.git
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run --cwd "$dir" forward 5173
+  assert_success
+  assert_line "openshell forward service $ARTEVEN_KOMORA_SANDBOX_NAME --target-port 5173 --local 5173"
+  rm -rf "$os_dir" "$dir"
+}
+
+@test "forward runs the gateway preflight before any forwarding work (#20)" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_dir:$PATH" run "$KOMORA_BIN" --dry-run forward 5173 arteven/komora
+  assert_success
+  assert_output --partial "openshell status"
+  rm -rf "$os_dir"
+}
+
+@test "parse_forward_spec splits PORT:LOCAL and defaults local to the target" {
+  run bash -c "source '$KOMORA_BIN' --source-only; parse_forward_spec '5173'"
+  assert_success
+  assert_output "5173 5173"
+  run bash -c "source '$KOMORA_BIN' --source-only; parse_forward_spec '5173:5174'"
+  assert_success
+  assert_output "5173 5174"
+}

@@ -108,7 +108,7 @@ its state, never reaches in to change it.
 
 **Prefer OpenShell's own mechanism over komora storage** — where OpenShell
 already holds a thing, komora wraps it rather than reimplementing it: secrets
-via providers, forwarding via `--forward` / `openshell service`, egress rules
+via providers, forwarding via `openshell forward service`, egress rules
 via `--policy`. The one thing komora owns outright is its **egress policy**, and
 only because a custom `--policy` fully *replaces* the built-in default rather
 than merging with it (verified, not assumed) — so changing one rule means
@@ -165,3 +165,26 @@ actually send an authenticated request (git does not read `GITHUB_TOKEN` on its
 own; with no configured credential it prompts for a username and, non-interactive,
 fails before reaching the proxy). See
 [ADR-0004](docs/adr/0004-git-push-credential-pat-at-the-proxy.md).
+
+**A capability that holds the terminal gets its own command** — `komora forward`
+runs in the foreground and is not folded into `run`. `openshell forward service`
+has no background flag (`forward start` does; that one binds local==remote and
+its `-d` did not detach), and `run` already spends the terminal on the agent's
+TTY. Sharing one invocation would mean daemonising a child komora does not
+supervise, plus a pidfile and crash cleanup — machinery this architecture exists
+to avoid. A second terminal is the honest shape, and the one `ssh -L` and
+`kubectl port-forward` already trained the hands for. The forward's lifetime is
+the terminal's, so Ctrl-C leaves nothing behind (verified: both host ports
+released, no active forwards, chamber still Ready).
+
+**Same verb, three mechanisms, one right answer** — "forwarding" named three
+different things in OpenShell, and picking by name rather than by shape would
+have picked wrong twice. `--forward` is create-time only, so it cannot reach a
+long-lived chamber that is already running and cannot know a port the dev server
+has not chosen yet. `forward start` is not gRPC at all — it shells out to
+`ssh -L` via `openshell ssh-proxy`, binding local==remote so a host clash is
+unresolvable. Only `forward service` attaches to an already-running, *idle*
+sandbox and splits target from local. The lesson generalises past forwarding:
+when an upstream offers several commands for one verb, test which one attaches
+to the state komora actually has, rather than taking the one the docs mention
+first.
