@@ -13,7 +13,10 @@
 #   podman run --rm --entrypoint sh \
 #     ghcr.io/nvidia/openshell-community/sandboxes/base:latest \
 #     -c 'cat /etc/openshell/policy.yaml' > /tmp/base-policy.yaml
-#   diff /tmp/base-policy.yaml policy/policy.yaml
+#   # This copy no longer ships as a file — it is the render_policy heredoc in
+#   # bin/komora (#31). Diff against its rendered output, not a repo file:
+#   bin/komora --render-policy > /tmp/komora-policy.yaml
+#   diff /tmp/base-policy.yaml /tmp/komora-policy.yaml
 #
 # Why the whole file and not a delta: `--policy` fully REPLACES the built-in
 # default — it does not merge (#29, verified empirically against 0.0.93; the

@@ -527,30 +527,36 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-# --- the egress policy komora owns (#29) ---
+# --- the egress policy komora owns (#29, #31) ---
 # komora passes --policy on every create. The load-bearing property is that it
 # passes it *at all*: without it, a chamber silently inherits whatever the base
 # image ships, so an image update can change komora's security posture without
 # anyone deciding to. `--policy` fully REPLACES the built-in default rather than
-# merging (verified against openshell 0.0.93), which is why the shipped file
+# merging (verified against openshell 0.0.93), which is why the embedded policy
 # carries the whole base policy and not a delta.
+#
+# #31 moved the vendored copy from a shipped policy/policy.yaml into an embedded
+# heredoc (render_policy), materialised to a temp file per create. So the path
+# --policy points at is now an mktemp file, not a repo path — the assertions
+# below track a `komora-policy.` prefix rather than `policy/policy.yaml`.
 
-@test "--dry-run run passes --policy on create, pointing at the policy komora ships" {
+@test "--dry-run run passes --policy on create, pointing at a materialised temp file" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   assert_output --partial "--policy"
-  assert_output --partial "policy/policy.yaml"
+  # the embedded policy lands in an mktemp file under $TMPDIR, recognisable by
+  # its komora-policy. prefix — a stable-enough handle for the dry-run seam.
+  assert_output --partial "komora-policy."
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "the policy path resolves relative to the script, not the cwd" {
-  # komora is launched from whatever repo you happen to be in, so a
-  # cwd-relative policy path would resolve to nothing on nearly every real
-  # invocation — and, without the refusal below, silently fall back to the
-  # image default.
+@test "the materialised policy path is not a repo-relative path, wherever komora is launched from" {
+  # #29 resolved the policy relative to the script; #31 makes it a temp file
+  # entirely, so the one invariant left is that no cwd- or repo-relative
+  # path leaks into --policy.
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
@@ -560,12 +566,13 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_success
   assert_output --partial "--policy"
   refute_output --partial "$elsewhere/policy"
+  refute_output --partial "policy/policy.yaml"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$elsewhere"
 }
 
-@test "KOMORA_POLICY overrides the shipped policy path" {
+@test "KOMORA_POLICY overrides the embedded policy, passing the path straight through" {
   # This is what makes the policy testable — iterate against a candidate file
-  # without editing the shipped one.
+  # without editing the script, and skip the heredoc entirely.
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
@@ -575,13 +582,16 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
     run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   assert_output --partial "$custom"
+  # the override wins: the heredoc's temp file is never materialised
+  refute_output --partial "komora-policy."
   rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$(dirname "$custom")"
 }
 
-@test "run refuses to create a sandbox when the policy file is missing, rather than inheriting the image default" {
-  # Falling back to the image's default policy would present as a working
-  # chamber on a weaker posture than komora committed to — the one failure
-  # mode owning a policy file exists to prevent.
+@test "run refuses when KOMORA_POLICY points at a missing file, rather than inheriting the image default" {
+  # An explicit override that names a file OpenShell cannot read is a hard
+  # refusal for the same reason #29 gave: falling back to the image default
+  # would present as a working chamber on a weaker posture than komora
+  # committed to.
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
@@ -594,46 +604,96 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "the shipped policy carries the whole base policy, not a delta" {
+@test "run refuses when the policy temp dir is not writable, rather than creating on an empty policy" {
+  # With no shipped file there is nothing to be *missing*; the refusal now
+  # guards the write. A non-writable TMPDIR must fail loudly, not fall back to
+  # the image default (#31).
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    TMPDIR="/nonexistent/dir" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_failure
+  assert_output --partial "temp file"
+  refute_output --partial "sandbox create"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the rendered policy is byte-identical to the checked-in fixture, so drift is caught" {
+  # render_policy is the single frozen vendored copy (#31). If someone edits
+  # the heredoc without re-vendoring the fixture, this fails — the whole point
+  # of embedding the policy is that its bytes stay pinned.
+  run diff "$KOMORA_ROOT/tests/fixtures/policy.expected.yaml" <("$KOMORA_BIN" --render-policy)
+  assert_success
+}
+
+@test "materialise_policy writes the policy to a temp file and cleans it up on exit" {
+  # The temp file must exist while komora runs — so `openshell sandbox create`
+  # can read it — and must not survive the process (#31). We source komora in a
+  # subshell that reports both the chosen path and whether the file existed at
+  # the moment materialise_policy returned; then, back in the parent, we assert
+  # the EXIT trap removed it once that subshell exited.
+  local dir; dir="$(mktemp -d)"
+  local out path existed_during
+  out="$(TMPDIR="$dir" bash -c "
+    source '$KOMORA_BIN' --source-only
+    materialise_policy
+    printf '%s\n' \"\$KOMORA_POLICY_PATH\"
+    [[ -s \"\$KOMORA_POLICY_PATH\" ]] && echo EXISTED_DURING
+  ")"
+  path="$(sed -n '1p' <<< "$out")"
+  existed_during="$(sed -n '2p' <<< "$out")"
+  assert [ -n "$path" ]
+  # the path is under our scratch TMPDIR, with the expected prefix
+  assert [ "$(dirname "$path")" = "$dir" ]
+  [[ "$(basename "$path")" == komora-policy.* ]]
+  # the file was present (and non-empty) while the shell was alive...
+  assert_equal "$existed_during" "EXISTED_DURING"
+  # ...and the trap fired: it is gone now the subshell has exited
+  assert [ ! -e "$path" ]
+  rm -rf "$dir"
+}
+
+@test "the embedded policy carries the whole base policy, not a delta" {
   # `--policy` replaces rather than merges, so a delta-only file would strip
   # every default entry — presenting as a broken chamber (agent cannot reach
   # Anthropic, git cannot clone) rather than as a policy mistake.
-  local policy="$KOMORA_ROOT/policy/policy.yaml"
-  [ -f "$policy" ]
+  local rendered; rendered="$("$KOMORA_BIN" --render-policy)"
   # every network policy the base image ships, verified present
   for np in claude_code github_ssh_over_https github_rest_api copilot pypi \
             codex opencode cursor vscode nvidia_inference; do
-    grep -q "^  ${np}:" "$policy" || { echo "missing network policy: $np" >&2; return 1; }
+    grep -q "^  ${np}:" <<< "$rendered" || { echo "missing network policy: $np" >&2; return 1; }
   done
 }
 
-@test "the shipped policy enables git-receive-pack for git push" {
-  local policy="$KOMORA_ROOT/policy/policy.yaml"
+@test "the embedded policy enables git-receive-pack for git push" {
+  local rendered; rendered="$("$KOMORA_BIN" --render-policy)"
   # present as a live rule, not as the commented-out block upstream ships
-  grep -q '^ *- allow:' "$policy"
-  run grep -A1 'path: "/\*\*/git-receive-pack"' "$policy"
+  grep -q '^ *- allow:' <<< "$rendered"
+  run grep -A1 'path: "/\*\*/git-receive-pack"' <<< "$rendered"
   assert_success
   refute_output --partial "#"
 }
 
-@test "the shipped policy loosens nothing else: no wildcard hosts, no added access: full" {
-  local policy="$KOMORA_ROOT/policy/policy.yaml"
+@test "the embedded policy loosens nothing else: no wildcard hosts, no added access: full" {
+  local rendered; rendered="$("$KOMORA_BIN" --render-policy)"
   # a wildcard host would defeat the default-deny proxy entirely
-  run grep -nE 'host: *["'"'"']?\*' "$policy"
+  run grep -nE 'host: *["'"'"']?\*' <<< "$rendered"
   assert_failure
   # api.anthropic.com is the only `access: full` the base ships; komora adds none
-  run bash -c "grep -c 'access: full' '$policy'"
+  run bash -c "grep -c 'access: full' <<< \"\$1\"" _ "$rendered"
   assert_output "1"
 }
 
-@test "the shipped policy widens no binary allowlist beyond the base image's" {
+@test "the embedded policy widens no binary allowlist beyond the base image's" {
   # The binary allowlist is a meaningful part of the containment: the policy
   # gates (binary, endpoint) pairs, so widening it is a real loosening even
   # when no host is added (#29).
   # Counts binary list entries only (`- path:` / `- { path:`), so the
   # provenance header's example paths in comments don't inflate it.
-  local policy="$KOMORA_ROOT/policy/policy.yaml"
-  run bash -c "grep -cE '^ *- \{? *path: ' '$policy'"
+  local rendered; rendered="$("$KOMORA_BIN" --render-policy)"
+  run bash -c "grep -cE '^ *- \{? *path: ' <<< \"\$1\"" _ "$rendered"
   assert_output "31"
 }
 
