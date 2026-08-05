@@ -406,7 +406,9 @@ materialise_policy() {
     echo "  check that ${TMPDIR:-/tmp} exists and is writable" >&2
     return 1
   }
-  # Clean up on any exit; append so we don't clobber a trap set elsewhere.
+  # Track the file for cleanup and arm the EXIT trap. Re-arming with the same
+  # handler is idempotent — komora sets no other EXIT trap — and the array
+  # means a second materialise in one process still gets both files removed.
   KOMORA_POLICY_TMPS+=("$tmp")
   trap 'komora_cleanup_policy_tmps' EXIT
 
@@ -470,7 +472,12 @@ launch_into() {
   # match sandbox exec's forced --tty on the resume path above (#19) — full
   # terminal fidelity (resize, Ctrl-C, truecolor) should not depend on
   # whether stdin happens to look like a terminal on first launch.
-  local KOMORA_POLICY_PATH=""
+  # Reset then resolve into the *global* KOMORA_POLICY_PATH — not a local. The
+  # trap materialise_policy registers and the file it writes have to outlive
+  # this call, so the value it hands back must live in komora's own shell (see
+  # resolve_policy_path). A `local` here would work only by accident of dynamic
+  # scope and would contradict that rationale.
+  KOMORA_POLICY_PATH=""
   resolve_policy_path || return 1
 
   plan openshell sandbox create --name "$name" --tty \
