@@ -59,3 +59,16 @@ rather than bind-mounting the file that holds them. A host config file bundles
 host-bound assumptions (absolute binary paths, credential helpers, `includeIf`
 chains); mounting it imports all of them to obtain the few that were wanted. See
 [ADR-0003](docs/adr/0003-git-identity-synthesized-not-mounted.md).
+
+**Inject at the proxy, never in the chamber** — a secret that must authenticate
+outbound traffic from the blast radius (the git-push PAT) is held in gateway
+state and added as a bearer header by the egress proxy; the chamber sees only an
+opaque placeholder, never the token. Possession is the exposure, so removing
+possession while keeping *use* is the win: the credential cannot be exfiltrated,
+only spent through the proxy while the chamber is live. Push needs **three**
+pieces, none sufficient alone: this proxy-injected credential, the policy's
+`git-receive-pack` rule, *and* a git-side `url.insteadOf` rewrite that makes git
+actually send an authenticated request (git does not read `GITHUB_TOKEN` on its
+own; with no configured credential it prompts for a username and, non-interactive,
+fails before reaching the proxy). See
+[ADR-0004](docs/adr/0004-git-push-credential-pat-at-the-proxy.md).

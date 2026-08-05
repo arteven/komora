@@ -290,6 +290,111 @@ ensure_repo_and_profile_volumes() {
 # sets to keep the account binding (~/.claude.json) *inside* the volume —
 # komora imports no host state, but still pins where the tool writes its own.
 
+# --- git push: the PAT github provider (#22, closes #9) ---
+#
+# The agent credential (above) never leaves the chamber — but a *push* needs a
+# GitHub credential, and that one komora deliberately keeps OUT of the chamber.
+# OpenShell's builtin `github` provider profile injects the PAT as a bearer
+# `Authorization` header *at the egress proxy* (auth_style: bearer,
+# header_name: authorization; verified against providers/github.yaml @ v0.0.93).
+# The chamber sees only an opaque placeholder env var, never the real token, so
+# a compromised agent cannot exfiltrate it — it can only spend it through the
+# proxy, on the endpoints the policy already gates (ADR-0004).
+#
+# Provider and policy COMPOSE — and neither works for push alone:
+#   - the builtin github profile authenticates github.com but its own rules
+#     allow only git-upload-pack (fetch/clone), not git-receive-pack (push);
+#   - komora's vendored policy adds the git-receive-pack allow rule (render_policy)
+#     but injects no credential.
+# Together: the policy opens the push path, the provider signs it. This is why
+# the provenance header records that a custom github *profile* "composes
+# nothing" on its own — the missing half was always the policy rule, not the
+# provider.
+#
+# The provider is a *profile-scoped* selection, matching CONTEXT.md's "profile
+# is a credential selection": one komora provider per profile, so switching
+# profiles switches which PAT (if any) signs pushes.
+KOMORA_GH_PROVIDER_PREFIX="komora-github"
+
+# The provider name for a profile. Deterministic, so create-or-reuse is a name
+# lookup (provider_exists), same discipline as sandbox_name.
+gh_provider_name() {
+  printf '%s-%s' "$KOMORA_GH_PROVIDER_PREFIX" "$KOMORA_PROFILE"
+}
+
+# True (exit 0) if a provider by this name is already registered on the gateway.
+# `provider get` fails only when there is genuinely no such provider — the same
+# shape sandbox_exists leans on for sandboxes.
+provider_exists() {
+  openshell provider get "$1" >/dev/null 2>&1
+}
+
+# Reads the host env for a GitHub PAT, printing which var holds it (GITHUB_TOKEN
+# preferred, then GH_TOKEN — the two keys the builtin github profile accepts)
+# or nothing when neither is set. komora reads only the *name*, never the value:
+# the value flows to `provider create --from-existing` through the inherited
+# environment, so it never becomes a komora variable or a CLI argument, and can
+# never land in the dry-run trace. This is what lets komora wire push without
+# ever seeing the PAT.
+gh_token_var() {
+  [[ -n "${GITHUB_TOKEN:-}" ]] && { printf 'GITHUB_TOKEN'; return 0; }
+  [[ -n "${GH_TOKEN:-}"     ]] && { printf 'GH_TOKEN';     return 0; }
+  return 1
+}
+
+# Registers (once) the profile's github provider, setting the caller's
+# KOMORA_GH_PROVIDER global to its name for attachment with `--provider`.
+# Returns non-zero and leaves the global empty when no PAT is present in the
+# host env — push wiring is *opt-in*: a developer who has set no token still
+# gets a working chamber (clone/fetch/agent), just no push, exactly as before
+# #22. So this never blocks a launch; launch_into warns and carries on.
+#
+# Sets a global rather than printing its result — the same discipline
+# resolve_policy_path and ensure_repo_and_profile_volumes follow, and for a
+# sharper reason here: the registration goes through `plan`, so under --dry-run
+# `plan` *prints* the provider-create line to stdout. Were this function to
+# return the provider name on stdout, a command substitution would capture that
+# trace line into the name and swallow it from the dry-run output. Keeping stdout
+# for `plan` alone lets the trace flow to the terminal and keeps the name clean.
+#
+# `--from-existing` reads the PAT from the host env var gh_token_var found and
+# stores it in gateway state; the sandbox receives only the placeholder. Because
+# the create goes through `plan`, a dry-run traces the registration without
+# running it — and without needing a real token, keeping the dry-run seam
+# side-effect-free (#15). Registration is idempotent by a name check, since
+# `provider create` errors on an existing name (like volume/sandbox create).
+ensure_gh_provider() {
+  KOMORA_GH_PROVIDER=""
+  local name; name="$(gh_provider_name)"
+  # An already-registered provider is the signal to attach it — the PAT lives in
+  # gateway state (put there out-of-band, e.g. `openshell provider create`, or by
+  # an earlier launch), NOT in this shell's env. Gating on a host env token here
+  # would refuse to attach a provider that is registered and ready, denying push
+  # for exactly the ADR-0004 setup that keeps the token out of the environment.
+  if provider_exists "$name"; then
+    KOMORA_GH_PROVIDER="$name"
+    return 0
+  fi
+  # No provider yet — creating one needs a token for `--from-existing` to read.
+  gh_token_var >/dev/null || return 1
+  plan openshell provider create --name "$name" --type github --from-existing
+  KOMORA_GH_PROVIDER="$name"
+}
+
+# Warns, on the host, that pushes will be denied because no PAT is set — the
+# push counterpart to warn_unset_identity, and never blocking for the same
+# reason: a chamber with no push credential is still a useful chamber. Actionable
+# — it names the env var and the provider mechanism — and fires only on create,
+# where the provider would have been attached.
+warn_no_gh_token() {
+  echo "komora: no GitHub PAT in the environment — git push from this chamber will be denied" >&2
+  echo "  clone, fetch and the agent still work; only push needs the token." >&2
+  echo "  export a fine-grained PAT (contents: read/write) as GITHUB_TOKEN, then re-run:" >&2
+  echo "    export GITHUB_TOKEN=…   # the value stays in your shell; komora never reads it" >&2
+  echo "  komora registers an OpenShell provider that injects it at the proxy — the token" >&2
+  echo "  never enters the chamber (see ADR-0004)." >&2
+}
+
 cmd_stop() {
   echo "komora: stop not yet implemented" >&2
   return 1
@@ -427,10 +532,11 @@ driver_config_json() {
     "$repo_vol" "$SANDBOX_REPO_DIR" "$profile_vol" "$SANDBOX_CONFIG_DIR"
 }
 
-# Emits the in-sandbox shell fragment that writes the chamber's git identity
-# fresh, to be prepended to the launch command on both the create and resume
-# paths (#27). ADR-0003: synthesized every start, never mounted — so this runs
-# on every launch, overwriting whatever a previous start wrote.
+# Emits the in-sandbox shell fragment that writes the chamber's git config
+# fresh — identity (#27) and the git-side push credential (#22) — prepended to
+# the launch command on both the create and resume paths. ADR-0003: synthesized
+# every start, never mounted, so this runs on every launch, overwriting whatever
+# a previous start wrote into SANDBOX_GITCONFIG.
 #
 # The identity values come from komora's *host* config (komora_config_get) and
 # are interpolated into a `git config --file SANDBOX_GITCONFIG` call that runs
@@ -438,24 +544,63 @@ driver_config_json() {
 # where GIT_CONFIG_GLOBAL points git. Values are single-quoted with the standard
 # '\'' escape so a name containing a quote cannot break out of the command.
 #
-# When neither value is set the fragment is a single `:` no-op — nothing to
-# synthesize. The warning about that (warn_unset_identity) is a host-side
-# concern printed before handoff, not baked into the in-chamber command, so the
-# chamber command stays about writing config and the warning reaches the user's
-# terminal directly.
+# The push credential is the third half of git-push (#22, ADR-0004): the policy
+# opens git-receive-pack and the provider injects the real PAT at the proxy, but
+# git will not *send* a request it thinks is unauthenticated — it prompts for a
+# username and, non-interactive, dies with "could not read Username" (verified
+# live). So komora writes a url.insteadOf rewrite that makes every github.com
+# URL carry `x-access-token:$GITHUB_TOKEN` as a Basic credential; the proxy
+# rewrites that placeholder to the real token on the wire. Three properties earn
+# this exact form:
+#   - $GITHUB_TOKEN is expanded *in the chamber*, not by komora — the chamber
+#     holds only OpenShell's opaque placeholder (komora never sees a token,
+#     ADR-0004), and the placeholder is revision-scoped (openshell:resolve:env:
+#     v<N>_GITHUB_TOKEN), so referencing the live var survives credential
+#     rotation where a hardcoded string would not.
+#   - It is guarded by a chamber-side `[ -n "$GITHUB_TOKEN" ]`, so it is inert
+#     when no provider is attached (no placeholder in the env) — the snippet can
+#     be emitted unconditionally on both create and resume without threading the
+#     host-side KOMORA_GH_PROVIDER through, and it self-heals a resumed chamber
+#     whose placeholder revision changed.
+#   - insteadOf, not http.extraheader: git 2.43 ignores an Authorization
+#     extraheader for its credential decision and still prompts for a username
+#     (verified live via ls-remote), whereas a Basic credential in the rewritten
+#     URL is a credential git will actually use.
+#
+# When there is nothing to write — no identity AND (structurally) the push guard
+# still emits, so the fragment is only a bare no-op when identity is unset; the
+# push guard always rides along because its cost when absent is one shell test.
+# The no-op path returns a complete ':;' statement (not a bare ':'): launch_command
+# splices this immediately before `if [ ! -d … ]`, and a bare ':' would swallow
+# that `if` as its arguments (terminated only by the first ';'), orphaning `then`
+# → `sh: Syntax error: "then" unexpected`. The trailing ';' closes the no-op.
+#
+# warn_unset_identity / warn_no_gh_token are host-side concerns printed before
+# handoff, not baked into this command, so the chamber command stays about
+# writing config and the warnings reach the user's terminal directly.
 chamber_gitconfig_snippet() {
   local name email
   name="$(komora_config_get user.name)"
   email="$(komora_config_get user.email)"
 
-  [[ -z "$name" && -z "$email" ]] && { printf ':'; return 0; }
-
   local out=""
   # rm any stale file first: a value cleared in komora's config must clear in
-  # the chamber too, and `git config --unset` on an absent key would error.
+  # the chamber too, and `git config --unset` on an absent key would error. The
+  # rewrite below is re-added fresh, so a rotated placeholder never goes stale.
   out+="rm -f $SANDBOX_GITCONFIG;"
   [[ -n "$name" ]]  && out+=" git config --file $SANDBOX_GITCONFIG user.name '${name//\'/\'\\\'\'}';"
   [[ -n "$email" ]] && out+=" git config --file $SANDBOX_GITCONFIG user.email '${email//\'/\'\\\'\'}';"
+  # Push credential (#22): only when the provider injected a placeholder into
+  # the chamber env. $GITHUB_TOKEN stays single-quoted ON PURPOSE so the
+  # *chamber* shell expands it, not komora — the token, even as an opaque
+  # placeholder, is never a komora value (ADR-0004). SC2016 flags the very
+  # non-expansion this relies on.
+  # shellcheck disable=SC2016
+  out+=' if [ -n "$GITHUB_TOKEN" ]; then'
+  out+=" git config --file $SANDBOX_GITCONFIG"
+  # shellcheck disable=SC2016
+  out+=' url."https://x-access-token:$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/";'
+  out+=' fi;'
   printf '%s' "$out"
 }
 
@@ -658,11 +803,28 @@ launch_into() {
   KOMORA_POLICY_PATH=""
   resolve_policy_path || return 1
 
-  plan openshell sandbox create --name "$name" --tty \
-    --label "komora=true" --label "komora.slug=${slug}" \
-    --policy "$KOMORA_POLICY_PATH" \
-    --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")" \
-    -- sh -c "$(launch_command "$repo_id" "$final")"
+  # Register (once) the profile's github PAT provider and attach it so git push
+  # is authenticated at the proxy (#22). Opt-in: with no PAT in the host env
+  # ensure_gh_provider registers nothing and reports it, komora warns, and the
+  # chamber is created with no --provider — a working clone/fetch/agent chamber
+  # whose only missing capability is push, exactly as before #22. The token is
+  # never a komora variable: --from-existing reads it from the inherited
+  # environment inside `provider create`, so it never reaches this array or the
+  # dry-run trace. The provider must be registered before create references it
+  # by name, so this sits above the invocation.
+  local create_cmd=(openshell sandbox create --name "$name" --tty
+    --label "komora=true" --label "komora.slug=${slug}"
+    --policy "$KOMORA_POLICY_PATH"
+    --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")")
+  KOMORA_GH_PROVIDER=""
+  if ensure_gh_provider; then
+    create_cmd+=(--provider "$KOMORA_GH_PROVIDER")
+  else
+    warn_no_gh_token
+  fi
+  create_cmd+=(-- sh -c "$(launch_command "$repo_id" "$final")")
+
+  plan "${create_cmd[@]}"
 }
 
 # Slice 1 (#18): one command lands you in an authenticated agent session.
@@ -795,7 +957,9 @@ network_policies:
           # Shipped commented out upstream; komora enables it. This is the
           # only delta from the vendored base policy. The credential is not
           # here: OpenShell's builtin `github` provider injects a PAT as a
-          # bearer header at the proxy, so the chamber holds no token (#9).
+          # bearer header at the proxy, so the chamber holds no token (#9,
+          # ADR-0004). This rule and that provider are two halves of one
+          # capability — dropping either silently disables push.
           - allow:
               method: POST
               path: "/**/git-receive-pack"

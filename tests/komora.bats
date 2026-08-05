@@ -18,6 +18,13 @@ setup() {
   # whether to synthesize identity and whether to warn.
   export XDG_CONFIG_HOME="${BATS_TEST_TMPDIR}/xdg"
   mkdir -p "$XDG_CONFIG_HOME"
+
+  # Scrub any GitHub PAT the dev's shell may export (#22): whether komora wires
+  # the push provider is decided by GITHUB_TOKEN/GH_TOKEN in the environment, so
+  # a token leaking in from the host would flip the create path under the test's
+  # feet and make the suite pass or fail by accident. Every test starts with no
+  # token — i.e. the "push not wired" path — unless it exports one itself.
+  unset GITHUB_TOKEN GH_TOKEN
 }
 
 @test "rejects an unknown command with a usage message and exit 2" {
@@ -338,13 +345,22 @@ fake_credential_dir() {
 # `sandbox get`.
 
 fake_openshell_sandbox_get() {
-  local existing_name="${1:-}"
+  local existing_name="${1:-}" existing_provider="${2:-}"
   local fake_dir; fake_dir="$(mktemp -d)"
   cat > "$fake_dir/openshell" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == "sandbox" && "\$2" == "get" ]]; then
   [[ "\$3" == "$existing_name" ]] && exit 0
   echo "sandbox not found" >&2
+  exit 1
+fi
+# provider get <name>: mirrors sandbox get for the push provider (#22). Reports
+# "found" only for the name the test names as already-registered, so a test can
+# drive komora down either the register-now or the reuse-existing branch. The
+# default (no provider named) is "not found", the create branch.
+if [[ "\$1" == "provider" && "\$2" == "get" ]]; then
+  [[ "\$3" == "$existing_provider" ]] && exit 0
+  echo "provider not found" >&2
   exit 1
 fi
 exit 0
@@ -691,6 +707,133 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_output "31"
 }
 
+# --- git push: the PAT github provider (#22) ---
+# The policy rule above opens the push *path*; the provider signs the push with
+# a PAT injected at the proxy. These tests assert the create wiring: opt-in on a
+# host token, the token value never surfacing, idempotent registration, and the
+# resume path staying provider-free. The token=proxy-not-chamber guarantee is a
+# property of OpenShell's provider system (verified in research, ADR-0004); what
+# komora owns and these tests pin is that komora never handles the value.
+
+@test "--dry-run run with a PAT registers the github provider and attaches it on create" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" GITHUB_TOKEN=ghp_fake \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # registration, once, reading the PAT from the environment (never a CLI arg)
+  assert_output --partial "openshell provider create --name komora-github-default --type github --from-existing"
+  # attached to the create so the proxy signs pushes for this chamber
+  assert_output --partial "--provider komora-github-default"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the PAT value never appears in komora's output — the chamber holds no token (#22, #9)" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  # A recognisable sentinel as the token; it must appear nowhere in the trace.
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" GITHUB_TOKEN=ghp_SENTINEL_secret_value \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial "ghp_SENTINEL_secret_value"
+  # --from-existing is the mechanism that keeps it out: the value flows through
+  # the environment, never as an argument komora assembles
+  assert_output --partial "--from-existing"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run run without a PAT attaches no provider and warns, but still creates the chamber" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  # setup() has scrubbed GITHUB_TOKEN/GH_TOKEN, so this is the no-token path.
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial "provider create"
+  refute_output --partial "--provider"
+  # the chamber is still created — push is the only capability withheld
+  assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME"
+  # and komora says so actionably, on stderr
+  assert_output --partial "git push from this chamber will be denied"
+  assert_output --partial "GITHUB_TOKEN"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run run reuses an already-registered provider instead of re-creating it (idempotent)" {
+  # The fake reports komora-github-default as already present, so komora should
+  # attach it without a second `provider create`.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "" "komora-github-default")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" GITHUB_TOKEN=ghp_fake \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial "provider create"
+  assert_output --partial "--provider komora-github-default"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run run attaches an already-registered provider even with NO host token (#22)" {
+  # Bug A regression: the ADR-0004 setup puts the PAT in gateway state (e.g. via
+  # `openshell provider create`), NOT in the shell env. setup() scrubs
+  # GITHUB_TOKEN/GH_TOKEN, and the fake reports the provider already present.
+  # komora must attach it — gating on a host token here would deny push for the
+  # exact configuration that keeps the token out of the environment.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "" "komora-github-default")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # attached despite no env token, and not re-created (it already exists)
+  assert_output --partial "--provider komora-github-default"
+  refute_output --partial "provider create"
+  # and NO "push will be denied" warning — push is wired
+  refute_output --partial "git push from this chamber will be denied"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "GH_TOKEN is accepted when GITHUB_TOKEN is unset" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" GH_TOKEN=ghp_fake \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "--provider komora-github-default"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the provider name follows the profile, matching 'profile is a credential selection'" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    KOMORA_PROFILE=work GITHUB_TOKEN=ghp_fake \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "--provider komora-github-work"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run run resume attaches no provider — the credential lives at the gateway, not the chamber (#22)" {
+  # On resume the sandbox already exists; the provider was registered at create
+  # and lives in gateway state, so resume neither re-registers nor re-attaches.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" GITHUB_TOKEN=ghp_fake \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME"
+  refute_output --partial "provider create"
+  refute_output --partial "--provider"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
 # --- cmd_shell: same create-or-resume, differing final command (#14, #19) ---
 # `shell` shares launch_into with `run`; these tests focus on what #19 adds —
 # a shell instead of the agent — and lean on the run tests above to already
@@ -931,17 +1074,28 @@ EOF
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "run with no identity synthesizes nothing — the chamber snippet is a bare no-op" {
+@test "run with no identity writes no user.name/user.email, but still emits the push-credential guard" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
-  # no `git config --file` write in the in-chamber command when identity is unset
-  refute_output --partial "git config --file"
-  # the create path always passes GIT_CONFIG_GLOBAL so git finds the file once
-  # one is written on a later start
+  # no identity write when name/email are unset (the warning text mentions
+  # `user.name`, so assert on the chamber write's `--file … user.name` form)
+  refute_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name'
+  refute_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.email'
+  # the create path always passes GIT_CONFIG_GLOBAL so git finds the file
   assert_output --partial "GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig"
+  # The chamber command must parse under /bin/sh: the snippet leads with a
+  # complete `rm -f …;` (not a bare ':') so the following `if [ ! -d … ]` is a
+  # statement, not swallowed as arguments (the Bug B class → `then` unexpected).
+  # The plan trace %q-quotes the whole `sh -c` arg, so `rm -f …; if …` renders
+  # with escaped spaces/semicolons.
+  assert_output --partial 'sh -c rm\ -f\ /sandbox/.claude/gitconfig\;'
+  # push credential is emitted regardless of identity, guarded on the in-chamber
+  # $GITHUB_TOKEN placeholder the provider injects (#22, ADR-0004)
+  assert_output --partial 'if\ \[\ -n\ \"\$GITHUB_TOKEN\"\ \]\;\ then'
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -976,6 +1130,34 @@ EOF
   refute_output --partial "git clone"
   assert_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name\ \'"'"'Ada\ Lovelace\'"'"''
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the git-side push credential (url.insteadOf) is synthesized on create AND resume (#22)" {
+  # Push needs THREE halves (ADR-0004): the policy git-receive-pack rule, the
+  # proxy-injected provider, and this git-side rewrite that makes git actually
+  # SEND an authenticated request (git won't push a request it thinks is
+  # anonymous — verified live: "could not read Username"). Like identity, the
+  # rewrite is synthesized every start so a resumed chamber and a rotated
+  # placeholder both stay wired; unlike identity, it is guarded on the in-chamber
+  # $GITHUB_TOKEN so it is inert when no provider is attached.
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+
+  # create path
+  local os_create; os_create="$(fake_openshell_sandbox_get)"
+  PATH="$os_create:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial 'if\ \[\ -n\ \"\$GITHUB_TOKEN\"\ \]\;\ then'
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
+  rm -rf "$os_create"
+
+  # resume path (sandbox already exists) — the rewrite must ride along here too
+  local os_resume; os_resume="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_resume:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "sandbox exec"
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
+  rm -rf "$os_resume" "$pm_dir" "$cred_dir"
 }
 
 @test "a value containing a single quote is safely quoted in the chamber command" {
