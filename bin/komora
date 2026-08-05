@@ -140,7 +140,8 @@ prime_volume() {
 }
 
 # Creates and primes both persistent volumes for a repo id + slug + profile
-# name, then stages the host credential into the profile volume. Sets the
+# name. The profile volume is primed but never seeded with a credential —
+# login happens inside the chamber, not staged from the host (#30). Sets the
 # caller's REPO_VOL / PROFILE_VOL / SANDBOX_UID globals rather than printing
 # a return value — plan's dry-run trace already owns stdout here, so a
 # printed return line would be indistinguishable from trace output
@@ -166,49 +167,20 @@ ensure_repo_and_profile_volumes() {
 
   prime_volume "$REPO_VOL" "$SANDBOX_UID"
   prime_volume "$PROFILE_VOL" "$SANDBOX_UID"
-  stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
 }
 
-# Resolves the host's real agent config dir: CLAUDE_CONFIG_DIR if set, else
-# ~/.claude, with symlinks resolved — a symlinked tree would dangle inside
-# the sandbox (#14, #18). Stale credential from the wrong location fails as
-# `401 OAuth access token has been revoked`, an error that points
-# convincingly at the wrong layer.
-host_config_dir() {
-  local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  readlink -f "$dir" 2>/dev/null || printf '%s' "$dir"
-}
-
-# Copies the host's credential into the profile volume, as the sandbox uid,
-# from the host's *resolved* config dir (#14, #18). A copy, not a mount: the
-# sandbox must be able to write it (rotation would wedge on a read-only
-# mount), but must never write back to the host's live credential (#12).
-# Idempotent and safe to re-run: overwrites with whatever the host currently
-# holds, which is what makes profile switches and rotation both work.
+# komora derives no credential from the host (#30). The profile volume starts
+# empty (but for priming) and the developer logs in *inside* the chamber; the
+# credential lives only in that volume from then on. Claude Code already
+# handles an unauthenticated start — it prompts for /login — so komora runs no
+# detection and offers no `komora auth` command.
 #
-# Runs as container root (host uid, via rootless Podman's userns), not the
-# sandbox uid: the host credential is 0600 owned by the host user, so the
-# sandbox uid — a different uid entirely — cannot read it through the bind
-# mount (verified live: `cp` fails `Permission denied` under --user
-# "$uid:$uid"). Root can read it (rootless root maps to the host's own uid),
-# then chowns the copy to the sandbox uid so the agent can read and rewrite
-# it once mounted into the sandbox.
-stage_credential() {
-  local profile_vol="$1" uid="$2"
-  local host_dir; host_dir="$(host_config_dir)"
-  local cred="$host_dir/.credentials.json"
-
-  if [[ ! -f "$cred" ]]; then
-    echo "komora: no credential found at $cred" >&2
-    echo "  checked CLAUDE_CONFIG_DIR override, falling back to ~/.claude" >&2
-    echo "  log in with the agent CLI on the host first" >&2
-    return 1
-  fi
-
-  plan podman run --rm --user "0:0" --entrypoint sh \
-    -v "${profile_vol}:/x" -v "${cred}:/src/.credentials.json:ro" "$KOMORA_IMAGE" \
-    -c "cp /src/.credentials.json /x/.credentials.json && chown ${uid}:${uid} /x/.credentials.json && chmod 600 /x/.credentials.json"
-}
+# This deletes the whole `401 OAuth access token has been revoked` failure
+# class that staging from the host bought: there is no host copy to go stale,
+# no host config dir to resolve wrong, and no restage-on-resume subtlety. Note
+# this is the opposite direction from SANDBOX_CONFIG_ENV, which komora still
+# sets to keep the account binding (~/.claude.json) *inside* the volume —
+# komora imports no host state, but still pins where the tool writes its own.
 
 cmd_stop() {
   echo "komora: stop not yet implemented" >&2
@@ -434,9 +406,9 @@ komora_cleanup_policy_tmps() {
 }
 
 # Shared create-or-resume path for both cmd_run and cmd_shell (#14, #18,
-# #19). The agent and a shell need identical volumes, priming, staging, and
-# collision handling — only the final command exec'd inside the sandbox
-# varies, so that's the one thing parameterized here.
+# #19). The agent and a shell need identical volumes, priming, and collision
+# handling — only the final command exec'd inside the sandbox varies, so
+# that's the one thing parameterized here.
 launch_into() {
   local repo_id="$1" slug="$2" final="$3"
 
@@ -444,17 +416,12 @@ launch_into() {
 
   if sandbox_exists "$name"; then
     echo "komora: resuming sandbox '$name' for $repo_id" >&2
-    # Restage the credential even on resume: the profile volume is what
-    # makes login once-per-profile rather than once-per-sandbox, but that
-    # only holds if a host-side re-login is reflected into an already-live
-    # sandbox too. Skipping this reproduces the exact misleading
-    # `401 OAuth access token has been revoked` #18 exists to prevent.
-    local PROFILE_VOL SANDBOX_UID
-    PROFILE_VOL="komora-profile-${KOMORA_PROFILE}"
-    SANDBOX_UID="$(resolve_sandbox_uid)"
-    stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
-    # The clone already exists by construction (a sandbox only ever gets
-    # created after cloning), so resuming just lands in it and hands off.
+    # No credential staging on resume (#30): the credential lives in the
+    # profile volume, written by an in-chamber login, and the volume outlives
+    # the sandbox — so a resumed sandbox is already authenticated with nothing
+    # for komora to restage. The clone already exists by construction (a
+    # sandbox only ever gets created after cloning), so resuming just lands in
+    # it and hands off.
     plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec env $SANDBOX_CONFIG_ENV $final"
     return
   fi
