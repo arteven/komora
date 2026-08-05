@@ -33,16 +33,31 @@ SANDBOX_CONFIG_DIR="/sandbox/.claude"
 # authenticated agent in a fresh one with no re-login and no warning.
 SANDBOX_CONFIG_ENV="CLAUDE_CONFIG_DIR=$SANDBOX_CONFIG_DIR"
 
-# The egress policy komora owns and passes on every create (#29). Resolved
-# relative to this script, never the cwd — komora is launched from whatever
-# repo you happen to be in. KOMORA_POLICY overrides it, which is what makes
-# the policy testable without editing the shipped file.
+# The egress policy komora owns and passes on every create (#29, #31). It
+# lives as an embedded heredoc (render_policy, at the foot of this file) so
+# komora stays a single self-contained script — no data file shipping
+# alongside it. On each create komora renders the heredoc to a temp file and
+# points --policy at that path; OpenShell needs a file, so komora materialises
+# one transiently rather than keeping one at rest (#31).
 #
-# Passing this is not optional: without --policy, komora silently inherits
+# KOMORA_POLICY overrides the heredoc entirely: set it to a path and komora
+# passes that file straight through, skipping the render. That is the seam
+# that makes the policy testable without editing the script, and the one #29's
+# live verification leaned on.
+#
+# Passing --policy is not optional: without it, komora silently inherits
 # whatever the image ships, so an image update can change komora's security
 # posture without anyone deciding to (#29).
-KOMORA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KOMORA_POLICY="${KOMORA_POLICY:-$KOMORA_ROOT/policy/policy.yaml}"
+KOMORA_POLICY="${KOMORA_POLICY:-}"
+
+# Temp policy files materialise_policy creates, cleaned up on exit (#31).
+KOMORA_POLICY_TMPS=()
+
+# The resolved --policy path for the current create. resolve_policy_path sets
+# it in place (rather than printing) so materialise_policy's cleanup trap and
+# temp file both live in komora's shell, not a command-substitution subshell
+# that would exit — and delete the file — before the create reads it (#31).
+KOMORA_POLICY_PATH=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -343,6 +358,81 @@ launch_command() {
     "$dir" "$dir" "$repo_id" "$dir" "$dir" "$SANDBOX_CONFIG_ENV" "$final"
 }
 
+# Resolves the --policy path for a create, setting the KOMORA_POLICY_PATH
+# global (not printing it). The global matters: materialise_policy registers an
+# EXIT trap to clean up the temp file, and a trap set inside a command
+# substitution fires when that *subshell* exits — which would delete the file
+# before `openshell sandbox create` ever reads it. Setting a global keeps both
+# the trap and the file alive in komora's own shell until komora itself exits,
+# after the create has run. This is the same set-a-global-not-print discipline
+# ensure_repo_and_profile_volumes already follows, for the same reason.
+#
+# Two modes (#31):
+#
+#   - KOMORA_POLICY set  -> use that path, skipping the heredoc. The override
+#     is a path OpenShell must be able to read, so a missing file is a hard
+#     refusal: falling back to the image default would present as a working
+#     chamber on a weaker posture than komora committed to (#29). Loud failure
+#     is the whole value of owning the policy.
+#
+#   - KOMORA_POLICY unset -> render the embedded heredoc to a temp file. With
+#     no shipped file there is nothing to be *missing*; the refusal now guards
+#     the write instead (materialise_policy).
+resolve_policy_path() {
+  if [[ -n "$KOMORA_POLICY" ]]; then
+    if [[ ! -f "$KOMORA_POLICY" ]]; then
+      echo "komora: policy file not found at $KOMORA_POLICY" >&2
+      echo "  KOMORA_POLICY points at a file komora cannot read" >&2
+      echo "  unset it to use the embedded policy, or fix the path" >&2
+      return 1
+    fi
+    KOMORA_POLICY_PATH="$KOMORA_POLICY"
+    return 0
+  fi
+  materialise_policy
+}
+
+# Writes the embedded policy heredoc to a fresh temp file, setting
+# KOMORA_POLICY_PATH to it. A new mktemp each call, under $TMPDIR (not a fixed
+# path), cleaned up on exit by a trap this registers (#31). The refusal guards
+# the *write*: an unwritable temp dir or an empty render — a heredoc that
+# somehow produced nothing — is a hard failure for the same reason a missing
+# override is, since `--policy` on an empty file is not the posture komora
+# committed to.
+materialise_policy() {
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/komora-policy.XXXXXX")" || {
+    echo "komora: could not create a temp file for the egress policy" >&2
+    echo "  check that ${TMPDIR:-/tmp} exists and is writable" >&2
+    return 1
+  }
+  # Track the file for cleanup and arm the EXIT trap. Re-arming with the same
+  # handler is idempotent — komora sets no other EXIT trap — and the array
+  # means a second materialise in one process still gets both files removed.
+  KOMORA_POLICY_TMPS+=("$tmp")
+  trap 'komora_cleanup_policy_tmps' EXIT
+
+  render_policy > "$tmp" || {
+    echo "komora: failed to write the embedded egress policy to $tmp" >&2
+    return 1
+  }
+  if [[ ! -s "$tmp" ]]; then
+    echo "komora: the embedded egress policy rendered empty" >&2
+    echo "  refusing to create a sandbox on an empty --policy file" >&2
+    return 1
+  fi
+  KOMORA_POLICY_PATH="$tmp"
+}
+
+# Removes every temp policy file materialise_policy created this run. Safe to
+# run with none pending (the array may be unset under set -u).
+komora_cleanup_policy_tmps() {
+  local f
+  for f in "${KOMORA_POLICY_TMPS[@]:-}"; do
+    [[ -n "$f" ]] && rm -f "$f"
+  done
+}
+
 # Shared create-or-resume path for both cmd_run and cmd_shell (#14, #18,
 # #19). The agent and a shell need identical volumes, priming, staging, and
 # collision handling — only the final command exec'd inside the sandbox
@@ -382,20 +472,17 @@ launch_into() {
   # match sandbox exec's forced --tty on the resume path above (#19) — full
   # terminal fidelity (resize, Ctrl-C, truecolor) should not depend on
   # whether stdin happens to look like a terminal on first launch.
-  # Refuse rather than fall back: a missing policy file would otherwise mean
-  # inheriting the image's default silently, which is a weaker posture than
-  # the one komora committed to — and it would present as a working chamber
-  # (#29). Loud failure is the whole value of owning the file.
-  if [[ ! -f "$KOMORA_POLICY" ]]; then
-    echo "komora: policy file not found at $KOMORA_POLICY" >&2
-    echo "  komora refuses to create a sandbox without its own egress policy" >&2
-    echo "  set KOMORA_POLICY to override, or restore policy/policy.yaml" >&2
-    return 1
-  fi
+  # Reset then resolve into the *global* KOMORA_POLICY_PATH — not a local. The
+  # trap materialise_policy registers and the file it writes have to outlive
+  # this call, so the value it hands back must live in komora's own shell (see
+  # resolve_policy_path). A `local` here would work only by accident of dynamic
+  # scope and would contradict that rationale.
+  KOMORA_POLICY_PATH=""
+  resolve_policy_path || return 1
 
   plan openshell sandbox create --name "$name" --tty \
     --label "komora=true" --label "komora.slug=${slug}" \
-    --policy "$KOMORA_POLICY" \
+    --policy "$KOMORA_POLICY_PATH" \
     --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")" \
     -- sh -c "$(launch_command "$repo_id" "$final")"
 }
@@ -409,12 +496,269 @@ cmd_run() {
   launch_into "$repo_id" "$slug" "claude"
 }
 
+# Renders the embedded egress policy to stdout — the single frozen copy of the
+# base image's /etc/openshell/policy.yaml plus komora's one delta (#29, #31).
+#
+# VENDORED, NOT INHERITED, and now EMBEDDED rather than shipped: this heredoc
+# is where the vendored copy lives (#31). The provenance header and re-vendor
+# recipe ride inside it so re-vendoring stays a diff, not archaeology — the
+# recipe now diffs the image's file against `komora --render-policy`, this
+# function's output, not against a repo file that no longer exists.
+#
+# A quoted heredoc (<<'KOMORA_POLICY_EOF'): the policy carries `**` globs and
+# backtick/backslash characters in its comments that a plain heredoc would try
+# to expand or mangle. Nothing here is meant to be interpolated.
+render_policy() {
+  cat <<'KOMORA_POLICY_EOF'
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ---------------------------------------------------------------------------
+# VENDORED, NOT INHERITED. komora owns this file (#29).
+#
+# Provenance — re-vendor by diffing a fresh copy against this one:
+#   image:  ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+#   digest: sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e
+#   path:   /etc/openshell/policy.yaml
+#   as of:  2026-08-05, openshell 0.0.93
+#
+#   podman run --rm --entrypoint sh \
+#     ghcr.io/nvidia/openshell-community/sandboxes/base:latest \
+#     -c 'cat /etc/openshell/policy.yaml' > /tmp/base-policy.yaml
+#   # This copy no longer ships as a file — it is the render_policy heredoc in
+#   # bin/komora (#31). Diff against its rendered output, not a repo file:
+#   bin/komora --render-policy > /tmp/komora-policy.yaml
+#   diff /tmp/base-policy.yaml /tmp/komora-policy.yaml
+#
+# Why the whole file and not a delta: `--policy` fully REPLACES the built-in
+# default — it does not merge (#29, verified empirically against 0.0.93; the
+# OpenShell docs do not state this either way). A delta-only file does not
+# loosen the default, it silently strips it, and the result presents as a
+# broken chamber rather than a policy mistake.
+#
+# The cost: upstream policy changes do not reach komora's chambers until
+# someone re-vendors. This is the most expensive coupling to OpenShell komora
+# has taken on. Accepted deliberately — the cheap alternative (a custom
+# `github` provider profile) was tested and composes nothing (#22).
+#
+# komora's deltas from the base, each citing its ticket — search "komora #":
+#   - github_ssh_over_https: git-receive-pack write rule enabled (#22)
+#
+# Note the policy gates (binary, endpoint) PAIRS, not endpoints. Allowing a
+# host is not enough if the binary dialling it is off that policy's binary
+# list. Expect this on every addition.
+# ---------------------------------------------------------------------------
+
+version: 1
+
+# --- Sandbox setup configuration (queried once at startup) ---
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# --- Network policies (queried per-CONNECT request) ---
+#
+# Each named policy maps a set of allowed (binary, endpoint) pairs.
+# Binary identity is resolved via /proc/net/tcp inode lookup + /proc/{pid}/exe.
+# Ancestors (/proc/{pid}/status PPid walk) and cmdline paths are also matched.
+# SHA256 integrity is enforced in Rust via trust-on-first-use, not here.
+
+network_policies:
+  claude_code:
+    name: claude-code
+    endpoints:
+      - { host: api.anthropic.com, port: 443, protocol: rest, enforcement: enforce, access: full, tls: terminate }
+      - { host: statsig.anthropic.com, port: 443 }
+      - { host: sentry.io, port: 443 }
+      - { host: raw.githubusercontent.com, port: 443 }
+      - { host: platform.claude.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/node }
+
+  github_ssh_over_https:
+    name: github-ssh-over-https
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          # Git Smart HTTP read-only: allow clone, fetch, pull
+          # Discovery (query string is included in path matching)
+          - allow:
+              method: GET
+              path: "/**/info/refs*"
+          # Data transfer for reads (all repos)
+          - allow:
+              method: POST
+              path: "/**/git-upload-pack"
+          # Data transfer for writes — komora #22 (git push).
+          # Shipped commented out upstream; komora enables it. This is the
+          # only delta from the vendored base policy. The credential is not
+          # here: OpenShell's builtin `github` provider injects a PAT as a
+          # bearer header at the proxy, so the chamber holds no token (#9).
+          - allow:
+              method: POST
+              path: "/**/git-receive-pack"
+    binaries:
+      - { path: /usr/bin/git }
+
+  nvidia_inference:
+    name: nvidia-inference
+    endpoints:
+      - { host: integrate.api.nvidia.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /bin/bash }
+      - { path: /usr/local/bin/opencode }
+
+  # --- GitHub REST API (read-only) ---
+  github_rest_api:
+    name: github-rest-api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/gh }
+
+  # --- GitHub Copilot API ---
+  # Endpoints from https://docs.github.com/en/copilot/reference/copilot-allowlist-reference
+  copilot:
+    name: copilot
+    endpoints:
+      # Auth and user management
+      - { host: github.com, port: 443 }
+      - { host: api.github.com, port: 443 }
+      # Copilot API (subscription-tier routing)
+      - { host: api.githubcopilot.com, port: 443, protocol: rest, enforcement: enforce, access: read-write }
+      - { host: api.individual.githubcopilot.com, port: 443, protocol: rest, enforcement: enforce, access: read-write }
+      - { host: api.business.githubcopilot.com, port: 443, protocol: rest, enforcement: enforce, access: read-write }
+      - { host: api.enterprise.githubcopilot.com, port: 443, protocol: rest, enforcement: enforce, access: read-write }
+      # Model proxy
+      - { host: copilot-proxy.githubusercontent.com, port: 443, protocol: rest, enforcement: enforce, access: read-write }
+      # Telemetry, feature flags, updates
+      - { host: origin-tracker.githubusercontent.com, port: 443 }
+      - { host: telemetry.enterprise.githubcopilot.com, port: 443 }
+      - { host: default.exp-tas.com, port: 443 }
+      - { host: release-assets.githubusercontent.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/copilot }
+      - { path: "/usr/lib/node_modules/@github/copilot/node_modules/@github/**/copilot" }
+
+  pypi:
+    name: pypi
+    endpoints:
+      - { host: pypi.org, port: 443 }
+      - { host: files.pythonhosted.org, port: 443 }
+      # uv python install downloads from python-build-standalone on GitHub
+      - { host: github.com, port: 443 }
+      - { host: objects.githubusercontent.com, port: 443 }
+      # uv resolves python-build-standalone release metadata via the GitHub API
+      - { host: api.github.com, port: 443 }
+      - { host: downloads.python.org, port: 443 }
+    binaries:
+      - { path: /sandbox/.venv/bin/python }
+      - { path: /sandbox/.venv/bin/python3 }
+      - { path: /sandbox/.venv/bin/pip }
+      - { path: /app/.venv/bin/python }
+      - { path: /app/.venv/bin/python3 }
+      - { path: /app/.venv/bin/pip }
+      - { path: /usr/local/bin/uv }
+      # Managed Python installations from uv python install
+      - { path: "/sandbox/.uv/python/**" }
+
+  vscode:
+    name: vscode
+    endpoints:
+      - { host: update.code.visualstudio.com, port: 443 }
+      # NOTE: OPA host matching uses exact equality, not glob — list hosts explicitly.
+      - { host: az764295.vo.msecnd.net, port: 443 }
+      - { host: vscode.download.prss.microsoft.com, port: 443 }
+      - { host: marketplace.visualstudio.com, port: 443 }
+      - { host: gallerycdn.vsassets.io, port: 443 }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/wget }
+      - { path: "/sandbox/.vscode-server/**" }
+      - { path: "/sandbox/.vscode-remote-containers/**" }
+
+  cursor:
+    name: cursor
+    endpoints:
+      - { host: cursor.blob.core.windows.net, port: 443 }
+      # NOTE: OPA host matching uses exact equality, not glob — list hosts explicitly.
+      - { host: api2.cursor.sh, port: 443 }
+      - { host: repo.cursor.sh, port: 443 }
+      - { host: download.cursor.sh, port: 443 }
+      - { host: cursor.download.prss.microsoft.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/wget }
+      - { path: "/sandbox/.cursor-server/**" }
+
+  opencode:
+    name: opencode
+    endpoints:
+    - host: registry.npmjs.org
+      port: 443
+    - host: opencode.ai
+      port: 443
+    - host: integrate.api.nvidia.com
+      port: 443
+    binaries:
+    - path: /usr/lib/node_modules/opencode-ai/bin/.opencode
+    - path: /usr/bin/node
+    - path: /usr/local/bin/opencode
+
+  codex:
+    name: codex
+    endpoints:
+      - { host: api.openai.com,  port: 443 }
+      - { host: auth.openai.com, port: 443 }
+      - { host: chatgpt.com,     port: 443 }
+    binaries:
+      - { path: /usr/bin/codex }
+      - { path: /usr/bin/node }
+      - { path: "/usr/lib/node_modules/@openai/**" }
+KOMORA_POLICY_EOF
+}
+
 main() {
   local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) KOMORA_DRY_RUN=1; shift ;;
       --source-only) return 0 ;;
+      # Print the embedded egress policy and exit — the re-vendor seam (#31).
+      # Diff `komora --render-policy` against a fresh image copy to re-vendor;
+      # the byte-identity test asserts it matches the checked-in fixture.
+      --render-policy) render_policy; return 0 ;;
       --cwd)
         [[ $# -ge 2 ]] || { echo "komora: --cwd requires a directory argument" >&2; exit 2; }
         KOMORA_CWD="$2"; shift 2 ;;
