@@ -365,11 +365,19 @@ gh_token_var() {
 # `provider create` errors on an existing name (like volume/sandbox create).
 ensure_gh_provider() {
   KOMORA_GH_PROVIDER=""
-  gh_token_var >/dev/null || return 1
   local name; name="$(gh_provider_name)"
-  if ! provider_exists "$name"; then
-    plan openshell provider create --name "$name" --type github --from-existing
+  # An already-registered provider is the signal to attach it — the PAT lives in
+  # gateway state (put there out-of-band, e.g. `openshell provider create`, or by
+  # an earlier launch), NOT in this shell's env. Gating on a host env token here
+  # would refuse to attach a provider that is registered and ready, denying push
+  # for exactly the ADR-0004 setup that keeps the token out of the environment.
+  if provider_exists "$name"; then
+    KOMORA_GH_PROVIDER="$name"
+    return 0
   fi
+  # No provider yet — creating one needs a token for `--from-existing` to read.
+  gh_token_var >/dev/null || return 1
+  plan openshell provider create --name "$name" --type github --from-existing
   KOMORA_GH_PROVIDER="$name"
 }
 
@@ -545,7 +553,11 @@ chamber_gitconfig_snippet() {
   name="$(komora_config_get user.name)"
   email="$(komora_config_get user.email)"
 
-  [[ -z "$name" && -z "$email" ]] && { printf ':'; return 0; }
+  # A complete no-op statement (':;', not a bare ':'): launch_command splices
+  # this immediately before `if [ ! -d … ]`, and a bare ':' would swallow that
+  # `if` as its arguments (terminated only by the first ';'), orphaning `then`
+  # → `sh: Syntax error: "then" unexpected`. The trailing ';' closes the no-op.
+  [[ -z "$name" && -z "$email" ]] && { printf ':;'; return 0; }
 
   local out=""
   # rm any stale file first: a value cleared in komora's config must clear in

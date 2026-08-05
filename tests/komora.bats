@@ -776,6 +776,26 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
+@test "--dry-run run attaches an already-registered provider even with NO host token (#22)" {
+  # Bug A regression: the ADR-0004 setup puts the PAT in gateway state (e.g. via
+  # `openshell provider create`), NOT in the shell env. setup() scrubs
+  # GITHUB_TOKEN/GH_TOKEN, and the fake reports the provider already present.
+  # komora must attach it — gating on a host token here would deny push for the
+  # exact configuration that keeps the token out of the environment.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "" "komora-github-default")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" \
+    run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # attached despite no env token, and not re-created (it already exists)
+  assert_output --partial "--provider komora-github-default"
+  refute_output --partial "provider create"
+  # and NO "push will be denied" warning — push is wired
+  refute_output --partial "git push from this chamber will be denied"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
 @test "GH_TOKEN is accepted when GITHUB_TOKEN is unset" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
@@ -1065,6 +1085,14 @@ EOF
   # the create path always passes GIT_CONFIG_GLOBAL so git finds the file once
   # one is written on a later start
   assert_output --partial "GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig"
+  # the no-op must be a COMPLETE statement (':;'), never a bare ':' — spliced
+  # before `if [ ! -d … ]`, a bare ':' swallows the `if` as its arguments and
+  # orphans `then` → `sh: Syntax error: "then" unexpected`. Assert the emitted
+  # in-chamber command actually parses under /bin/sh, the guard Bug B slipped.
+  # The plan trace %q-quotes the whole `sh -c` argument, so ':; if …' renders as
+  # ':\;\ if\ …'. A bare ':' (Bug B) would render 'sh -c : if …' — the space
+  # between ':' and 'if' unescaped and unquoted, orphaning `then` in the chamber.
+  assert_output --partial 'sh -c :\;\ if\ \[\ \!\ -d'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
