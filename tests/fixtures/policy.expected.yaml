@@ -105,7 +105,9 @@ network_policies:
           # Shipped commented out upstream; komora enables it. This is the
           # only delta from the vendored base policy. The credential is not
           # here: OpenShell's builtin `github` provider injects a PAT as a
-          # bearer header at the proxy, so the chamber holds no token (#9).
+          # bearer header at the proxy, so the chamber holds no token (#9,
+          # ADR-0004). This rule and that provider are two halves of one
+          # capability — dropping either silently disables push.
           - allow:
               method: POST
               path: "/**/git-receive-pack"
