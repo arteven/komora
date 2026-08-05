@@ -412,7 +412,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ claude'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -434,7 +434,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ claude'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -484,6 +484,47 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_failure
   assert_output --partial "collis"
   rm -rf "$os_dir" "$fake_dir"
+}
+
+# --- CLAUDE_CONFIG_DIR: keeping the account binding in the volume (#29) ---
+# Claude Code splits its state across ~/.claude/ (inside the mount) and
+# ~/.claude.json (a *sibling* of it, holding oauthAccount and userID). Without
+# the override the latter lives in the container's ephemeral layer, so
+# destroying a sandbox loses the account binding while leaving the credential
+# valid — a fresh chamber then authenticates but shows onboarding.
+
+@test "run sets CLAUDE_CONFIG_DIR to the profile mount on create" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run sets CLAUDE_CONFIG_DIR on resume too, not only on create" {
+  # The resume path execs its own command, so it needs the override
+  # independently — a create-only fix would lose the binding on every
+  # subsequent launch.
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "sandbox exec"
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "shell sets CLAUDE_CONFIG_DIR as well, so an agent started by hand inside finds its config" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run shell arteven/komora
+  assert_success
+  assert_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude'
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
 # --- the egress policy komora owns (#29) ---
@@ -609,8 +650,10 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_success
   assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ bash\ -l'
-  refute_output --partial 'exec\ claude'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
+  # the agent is not the final command — matched with the env prefix so
+  # CLAUDE_CONFIG_DIR's own "claude" substring can't satisfy it
+  refute_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -623,7 +666,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   refute_output --partial "sandbox create"
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ bash\ -l'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 

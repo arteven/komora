@@ -9,10 +9,29 @@ KOMORA_PROFILE="${KOMORA_PROFILE:-default}"
 
 # Path inside the sandbox where the repo volume and profile volume land.
 # /sandbox is the sandbox user's home in the community base image (#18,
-# verified live) — the profile volume mounts exactly where the agent looks
-# for its config, no environment override required.
+# verified live).
 SANDBOX_REPO_DIR="/sandbox/repo"
 SANDBOX_CONFIG_DIR="/sandbox/.claude"
+
+# CLAUDE_CONFIG_DIR is required, not optional (#29, verified live).
+#
+# #18 recorded that the profile volume "mounts exactly where the agent looks
+# for its config, no environment override required." That was half true and
+# the missing half loses the account binding: Claude Code splits its state
+# across ~/.claude/ (credential, sessions, history — inside the mount) *and*
+# ~/.claude.json (oauthAccount, userID — a *sibling* of the mount, so in the
+# container's ephemeral layer). Destroy the sandbox and .claude.json dies
+# with it.
+#
+# The failure is nastier than a plain re-login: the credential is still
+# valid, so a fresh chamber authenticates fine but has lost which account it
+# belongs to, and presents onboarding as though login never happened. Another
+# "looks like komora's bug, isn't" case (cf. the 401 class #30 deletes).
+#
+# Setting CLAUDE_CONFIG_DIR to the mount relocates *everything*, .claude.json
+# included, into the volume — verified by destroying a sandbox and landing an
+# authenticated agent in a fresh one with no re-login and no warning.
+SANDBOX_CONFIG_ENV="CLAUDE_CONFIG_DIR=$SANDBOX_CONFIG_DIR"
 
 # The egress policy komora owns and passes on every create (#29). Resolved
 # relative to this script, never the cwd — komora is launched from whatever
@@ -320,8 +339,8 @@ driver_config_json() {
 # target look non-empty and refuse (#18, verified live).
 launch_command() {
   local repo_id="$1" final="$2" dir="$SANDBOX_REPO_DIR"
-  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec %s' \
-    "$dir" "$dir" "$repo_id" "$dir" "$dir" "$final"
+  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec env %s %s' \
+    "$dir" "$dir" "$repo_id" "$dir" "$dir" "$SANDBOX_CONFIG_ENV" "$final"
 }
 
 # Shared create-or-resume path for both cmd_run and cmd_shell (#14, #18,
@@ -346,7 +365,7 @@ launch_into() {
     stage_credential "$PROFILE_VOL" "$SANDBOX_UID"
     # The clone already exists by construction (a sandbox only ever gets
     # created after cloning), so resuming just lands in it and hands off.
-    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec $final"
+    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec env $SANDBOX_CONFIG_ENV $final"
     return
   fi
 
