@@ -1,7 +1,12 @@
 # komora
 
-A thin wrapper around the `openshell` CLI. See [CONTEXT.md](CONTEXT.md) and
-[#14](https://github.com/arteven/komora/issues/14) for the architecture.
+A thin wrapper around the `openshell` CLI. See [CONTEXT.md](CONTEXT.md) for the
+domain, and the wayfinder map [#1](https://github.com/arteven/komora/issues/1)
+for the route, current decisions, and open work.
+
+Architecture detail — user stories, testing seams, and the evidence base — lives
+in [#14](https://github.com/arteven/komora/issues/14), which is closed and
+carries corrections; the map is the current view.
 
 ## Development
 
