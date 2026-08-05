@@ -14,6 +14,17 @@ KOMORA_PROFILE="${KOMORA_PROFILE:-default}"
 SANDBOX_REPO_DIR="/sandbox/repo"
 SANDBOX_CONFIG_DIR="/sandbox/.claude"
 
+# The egress policy komora owns and passes on every create (#29). Resolved
+# relative to this script, never the cwd — komora is launched from whatever
+# repo you happen to be in. KOMORA_POLICY overrides it, which is what makes
+# the policy testable without editing the shipped file.
+#
+# Passing this is not optional: without --policy, komora silently inherits
+# whatever the image ships, so an image update can change komora's security
+# posture without anyone deciding to (#29).
+KOMORA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KOMORA_POLICY="${KOMORA_POLICY:-$KOMORA_ROOT/policy/policy.yaml}"
+
 usage() {
   cat >&2 <<'EOF'
 usage: komora [--dry-run] [--cwd DIR] <command> [args...]
@@ -352,8 +363,20 @@ launch_into() {
   # match sandbox exec's forced --tty on the resume path above (#19) — full
   # terminal fidelity (resize, Ctrl-C, truecolor) should not depend on
   # whether stdin happens to look like a terminal on first launch.
+  # Refuse rather than fall back: a missing policy file would otherwise mean
+  # inheriting the image's default silently, which is a weaker posture than
+  # the one komora committed to — and it would present as a working chamber
+  # (#29). Loud failure is the whole value of owning the file.
+  if [[ ! -f "$KOMORA_POLICY" ]]; then
+    echo "komora: policy file not found at $KOMORA_POLICY" >&2
+    echo "  komora refuses to create a sandbox without its own egress policy" >&2
+    echo "  set KOMORA_POLICY to override, or restore policy/policy.yaml" >&2
+    return 1
+  fi
+
   plan openshell sandbox create --name "$name" --tty \
     --label "komora=true" --label "komora.slug=${slug}" \
+    --policy "$KOMORA_POLICY" \
     --driver-config-json "$(driver_config_json "$REPO_VOL" "$PROFILE_VOL")" \
     -- sh -c "$(launch_command "$repo_id" "$final")"
 }
