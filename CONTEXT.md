@@ -45,6 +45,15 @@ reachability). Held on the map.
 **Slice** — a working vertical increment. Each leaves something usable; slices
 ship in order and don't front-load decisions a later slice answers better.
 
+**Verify, never manage (the gateway)** — komora depends on an OpenShell gateway
+but does not install, configure, or select a compute driver for one; those stay
+the developer's, so an OpenShell upgrade never fights the wrapper. komora only
+runs a **read-only preflight** (`openshell status`) before any sandbox
+operation and reports actionably when no gateway is reachable, rather than
+failing partway through creation with an error that reads like a komora bug.
+The general shape: where OpenShell owns a thing, komora checks it and speaks to
+its state, never reaches in to change it.
+
 **Synthesize, never mount** — komora pulls **named values** from a source
 rather than bind-mounting the file that holds them. A host config file bundles
 host-bound assumptions (absolute binary paths, credential helpers, `includeIf`
