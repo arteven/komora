@@ -748,6 +748,123 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$dir"
 }
 
+# --- gateway preflight (#20) ---
+# komora verifies a reachable OpenShell gateway before any sandbox operation,
+# and says so actionably when there is none — instead of failing partway through
+# `sandbox create`. komora does not manage the gateway: the check is read-only,
+# never writing config, installing, or selecting a driver.
+#
+# `openshell status` is the probe (exit 0 reachable, non-zero not). Under
+# --dry-run the live probe is skipped and a marker line stands in, so planning
+# needs no live gateway. The fakes below drive the probe's exit code directly.
+
+# A fake `openshell` that answers `status` with a chosen exit code, so a test
+# can stand up a "reachable" or "unreachable" gateway without a live one. All
+# other subcommands (`sandbox get`, etc.) succeed, matching
+# fake_openshell_sandbox_get's default for the create branch.
+fake_openshell_status() {
+  local status_exit="$1" existing_name="${2:-}"
+  local fake_dir; fake_dir="$(mktemp -d)"
+  cat > "$fake_dir/openshell" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "status" ]]; then
+  exit $status_exit
+fi
+if [[ "\$1" == "sandbox" && "\$2" == "get" ]]; then
+  [[ "\$3" == "$existing_name" ]] && exit 0
+  echo "sandbox not found" >&2
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "$fake_dir/openshell"
+  printf '%s' "$fake_dir"
+}
+
+@test "run refuses with an actionable error when no gateway is reachable, before any sandbox work" {
+  # NOT --dry-run: the live probe must actually run and gate the create.
+  local os_dir; os_dir="$(fake_openshell_status 1)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" run arteven/komora
+  assert_failure
+  assert_output --partial "no reachable OpenShell gateway"
+  # actionable: names what to do, and that the gateway is the dev's to set up
+  assert_output --partial "does not manage"
+  assert_output --partial "openshell status"
+  # failed up front: never reached volume priming or sandbox creation
+  refute_output --partial "sandbox create"
+  refute_output --partial "touch"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run proceeds past the preflight when the gateway is reachable" {
+  # A reachable gateway (status exit 0) lets the create path run to the point
+  # where it would exec podman/openshell — here landing on the resume branch,
+  # since the fake reports the sandbox as existing.
+  local os_dir; os_dir="$(fake_openshell_status 0 "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" run arteven/komora
+  assert_success
+  refute_output --partial "no reachable OpenShell gateway"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "shell is gated by the same preflight as run" {
+  local os_dir; os_dir="$(fake_openshell_status 1)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" shell arteven/komora
+  assert_failure
+  assert_output --partial "no reachable OpenShell gateway"
+  refute_output --partial "sandbox create"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "--dry-run skips the live gateway probe, so planning needs no gateway" {
+  # A fake whose `status` FAILS (exit 1): if the live probe ran under --dry-run,
+  # the create would be refused. It is not — the probe is skipped and a marker
+  # line stands in, so the full plan still prints.
+  local os_dir; os_dir="$(fake_openshell_status 1)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial "no reachable OpenShell gateway"
+  # the marker records where the live check would run — clearly not executed
+  assert_output --partial "gateway preflight (skipped under --dry-run)"
+  # and the rest of the plan still prints
+  assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the preflight never writes gateway config, installs, or selects a driver" {
+  # komora does not manage the gateway (#20). The only openshell call the
+  # preflight makes is the read-only `status`; it must issue none of the
+  # mutating gateway/settings verbs. A fake records every argv it is called with.
+  local os_dir; os_dir="$(mktemp -d)"
+  local log="$os_dir/calls.log"
+  cat > "$os_dir/openshell" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$log"
+[[ "\$1" == "status" ]] && exit 1   # unreachable, so komora stops at the preflight
+exit 0
+EOF
+  chmod +x "$os_dir/openshell"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" run arteven/komora
+  assert_failure
+  # the only openshell invocation was the read-only probe
+  run cat "$log"
+  assert_output "status"
+  refute_output --partial "gateway add"
+  refute_output --partial "gateway select"
+  refute_output --partial "settings"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
 # --- git identity: komora git config + chamber synthesis (#27) ---
 # ADR-0003 makes correct git identity a Must: synthesized fresh on every start,
 # never mounted from the host. Identity is explicit-only — komora's own global
