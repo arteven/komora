@@ -10,6 +10,14 @@ setup() {
   load '/usr/lib/bats/bats-assert/load'
   KOMORA_BIN="${BATS_TEST_DIRNAME}/../bin/komora"
   KOMORA_ROOT="${BATS_TEST_DIRNAME}/.."
+
+  # Isolate komora's own global config (#27) so no test reads or writes the
+  # dev's real ~/.config/komora/config. Every test starts with an empty komora
+  # config — which means "no git identity set" — unless it writes one itself.
+  # `komora git config` writes here; the launch tests read here to decide
+  # whether to synthesize identity and whether to warn.
+  export XDG_CONFIG_HOME="${BATS_TEST_TMPDIR}/xdg"
+  mkdir -p "$XDG_CONFIG_HOME"
 }
 
 @test "rejects an unknown command with a usage message and exit 2" {
@@ -398,7 +406,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -420,7 +428,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -696,10 +704,10 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_success
   assert_output --partial "openshell sandbox create --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   assert_output --partial 'git\ clone\ https://github.com/arteven/komora.git\ /sandbox/repo'
-  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
+  assert_output --partial 'exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig\ bash\ -l'
   # the agent is not the final command — matched with the env prefix so
   # CLAUDE_CONFIG_DIR's own "claude" substring can't satisfy it
-  refute_output --partial 'CLAUDE_CONFIG_DIR=/sandbox/.claude\ claude'
+  refute_output --partial 'GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig\ claude'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -712,7 +720,7 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   refute_output --partial "sandbox create"
   refute_output --partial "git clone"
-  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ bash\ -l'
+  assert_output --partial 'cd\ /sandbox/repo\ \&\&\ exec\ env\ CLAUDE_CONFIG_DIR=/sandbox/.claude\ GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig\ bash\ -l'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -738,4 +746,152 @@ ARTEVEN_KOMORA_SANDBOX_NAME="komora-a68a5c2881"
   assert_success
   assert_output --partial "openshell sandbox exec --name $ARTEVEN_KOMORA_SANDBOX_NAME --tty"
   rm -rf "$os_dir" "$pm_dir" "$cred_dir" "$dir"
+}
+
+# --- git identity: komora git config + chamber synthesis (#27) ---
+# ADR-0003 makes correct git identity a Must: synthesized fresh on every start,
+# never mounted from the host. Identity is explicit-only — komora's own global
+# config and nowhere else — and an unset identity WARNS but never blocks.
+#
+# XDG_CONFIG_HOME is redirected in setup() so these read and write an isolated,
+# initially-empty komora config, never the dev's real one.
+
+@test "git config with no identity set says so, actionably, and exits 0" {
+  run "$KOMORA_BIN" git config
+  assert_success
+  assert_output --partial "no git identity set"
+  assert_output --partial "komora git config user.name"
+  assert_output --partial "komora git config user.email"
+}
+
+@test "git config user.name/user.email persist and read back" {
+  run "$KOMORA_BIN" git config user.name "Ada Lovelace"
+  assert_success
+  run "$KOMORA_BIN" git config user.email "ada@example.com"
+  assert_success
+  run "$KOMORA_BIN" git config user.name
+  assert_output "Ada Lovelace"
+  run "$KOMORA_BIN" git config user.email
+  assert_output "ada@example.com"
+}
+
+@test "git config with no key shows the current identity once set" {
+  "$KOMORA_BIN" git config user.name "Ada Lovelace"
+  "$KOMORA_BIN" git config user.email "ada@example.com"
+  run "$KOMORA_BIN" git config
+  assert_success
+  assert_output --partial "Ada Lovelace"
+  assert_output --partial "ada@example.com"
+}
+
+@test "git config writes komora's own config under XDG_CONFIG_HOME, not the host ~/.gitconfig" {
+  "$KOMORA_BIN" git config user.name "Ada Lovelace"
+  assert [ -f "$XDG_CONFIG_HOME/komora/config" ]
+  run cat "$XDG_CONFIG_HOME/komora/config"
+  assert_output --partial "Ada Lovelace"
+}
+
+@test "git config refuses a key other than user.name / user.email" {
+  run "$KOMORA_BIN" git config user.signingkey ABC123
+  assert_failure 2
+  assert_output --partial "only manages user.name and user.email"
+}
+
+@test "git rejects a subcommand other than config" {
+  run "$KOMORA_BIN" git status
+  assert_failure 2
+  assert_output --partial "unknown git subcommand 'status'"
+}
+
+@test "run warns (without failing) when no git identity is configured" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "no git identity configured"
+  assert_output --partial "komora git config user.name"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run with no identity synthesizes nothing — the chamber snippet is a bare no-op" {
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # no `git config --file` write in the in-chamber command when identity is unset
+  refute_output --partial "git config --file"
+  # the create path always passes GIT_CONFIG_GLOBAL so git finds the file once
+  # one is written on a later start
+  assert_output --partial "GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run with identity set writes a fresh .gitconfig into the chamber before handoff, on create" {
+  "$KOMORA_BIN" git config user.name "Ada Lovelace"
+  "$KOMORA_BIN" git config user.email "ada@example.com"
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # a fresh file every start: clear then write, before the clone
+  assert_output --partial 'rm\ -f\ /sandbox/.claude/gitconfig'
+  assert_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name\ \'"'"'Ada\ Lovelace\'"'"''
+  assert_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.email\ \'"'"'ada@example.com\'"'"''
+  # no warning when identity is set
+  refute_output --partial "no git identity configured"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "run with identity set writes a fresh .gitconfig on resume too, not only create" {
+  # The synthesis is on every start (ADR-0003): a value changed since the
+  # sandbox was created must reach a resumed chamber. A create-only write goes
+  # stale — same reason CLAUDE_CONFIG_DIR is set on both branches.
+  "$KOMORA_BIN" git config user.name "Ada Lovelace"
+  local os_dir; os_dir="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "sandbox exec"
+  refute_output --partial "git clone"
+  assert_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name\ \'"'"'Ada\ Lovelace\'"'"''
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "a value containing a single quote is safely quoted in the chamber command" {
+  # The in-chamber write is a `sh -c` string; a name with an apostrophe must
+  # not be able to break out of the single-quoted value.
+  "$KOMORA_BIN" git config user.name "Ada O'Lovelace"
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  # the standard '\'' close-reopen escape, seen through plan's %q backslashing
+  assert_output --partial "Ada\\ O\\'\\\\\\'\\'Lovelace"
+  rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the host's ~/.gitconfig is read by nothing on any path" {
+  # komora derives no identity from the host (#27). Point HOME at a dir with a
+  # gitconfig carrying a distinctive identity; it must never appear in output.
+  local home_dir; home_dir="$(mktemp -d)"
+  cat > "$home_dir/.gitconfig" <<GITCONFIG
+[user]
+	name = HOST LEAK NAME
+	email = host-leak@example.com
+GITCONFIG
+  local os_dir; os_dir="$(fake_openshell_sandbox_get)"
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+  # XDG_CONFIG_HOME under the fake HOME too, so komora's own config is empty
+  PATH="$os_dir:$pm_dir:$PATH" HOME="$home_dir" XDG_CONFIG_HOME="$home_dir/.config" \
+    CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  refute_output --partial "HOST LEAK NAME"
+  refute_output --partial "host-leak@example.com"
+  rm -rf "$home_dir" "$os_dir" "$pm_dir" "$cred_dir"
 }

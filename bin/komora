@@ -13,6 +13,21 @@ KOMORA_PROFILE="${KOMORA_PROFILE:-default}"
 SANDBOX_REPO_DIR="/sandbox/repo"
 SANDBOX_CONFIG_DIR="/sandbox/.claude"
 
+# Where the synthesized git identity lands *inside* the chamber (#27).
+#
+# ADR-0003 makes correct git identity a Must: the chamber's git config is
+# written fresh on every start and never mounted from the host. But the sandbox
+# home is /sandbox, and neither mount covers /sandbox/.gitconfig — the repo
+# volume is at /sandbox/repo, the profile volume at /sandbox/.claude. Rather
+# than add a third mount for one file, komora writes the identity *into the
+# profile volume* (which it already mounts) and points git at it with
+# GIT_CONFIG_GLOBAL, which git reads ahead of ~/.gitconfig. This makes identity
+# travel with the profile volume — the same volume the credential lives in, and
+# where #22's PAT will want to sit — and it survives a resume, since the profile
+# volume outlives the sandbox. HOME is irrelevant: GIT_CONFIG_GLOBAL is an
+# absolute path git honours regardless of where it thinks home is.
+SANDBOX_GITCONFIG="$SANDBOX_CONFIG_DIR/gitconfig"
+
 # CLAUDE_CONFIG_DIR is required, not optional (#29, verified live).
 #
 # #18 recorded that the profile volume "mounts exactly where the agent looks
@@ -31,7 +46,13 @@ SANDBOX_CONFIG_DIR="/sandbox/.claude"
 # Setting CLAUDE_CONFIG_DIR to the mount relocates *everything*, .claude.json
 # included, into the volume — verified by destroying a sandbox and landing an
 # authenticated agent in a fresh one with no re-login and no warning.
-SANDBOX_CONFIG_ENV="CLAUDE_CONFIG_DIR=$SANDBOX_CONFIG_DIR"
+#
+# GIT_CONFIG_GLOBAL rides in the same list (#27): git inside the chamber reads
+# its identity from SANDBOX_GITCONFIG, the copy write_chamber_gitconfig lays
+# down fresh on every start (see SANDBOX_GITCONFIG). Both env vars share one
+# rationale — pin where a tool reads state komora controls — so they share one
+# variable, threaded through every exec by create and resume alike.
+SANDBOX_CONFIG_ENV="CLAUDE_CONFIG_DIR=$SANDBOX_CONFIG_DIR GIT_CONFIG_GLOBAL=$SANDBOX_GITCONFIG"
 
 # The egress policy komora owns and passes on every create (#29, #31). It
 # lives as an embedded heredoc (render_policy, at the foot of this file) so
@@ -74,6 +95,8 @@ commands:
               same as run, but open a shell instead of the agent
   id [owner/repo]
               resolve and print the repo id and slug this invocation means
+  git config [user.name|user.email [value]]
+              read or set the git identity komora writes into every chamber
 
   --dry-run   print podman/openshell invocations instead of running them
 EOF
@@ -102,6 +125,91 @@ slugify() {
   local s="${1,,}"
   s="${s//[^a-z0-9]/-}"
   printf '%s' "$s"
+}
+
+# --- komora's own global config (#27) ---
+#
+# The first komora-owned config file. Holds the git identity today; sized to
+# hold more later (#22's PAT wants to sit beside it). INI-shaped in git's own
+# vocabulary — a [user] section with name/email — so `komora git config` reads
+# and writes it with git itself as the parser, and the file is recognisable to
+# anyone who has seen a .gitconfig.
+#
+# Location follows the XDG base-dir spec, same shape the ticket named:
+# ${XDG_CONFIG_HOME:-$HOME/.config}/komora/config. This is host-side state
+# komora keeps for itself — it is *not* the file that reaches the chamber
+# (that is SANDBOX_GITCONFIG, written fresh from this one every start). Keeping
+# them separate is the derived-config rule: komora rewrites what it sends in and
+# never mounts this file.
+komora_config_file() {
+  printf '%s/komora/config' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+# Reads user.name / user.email out of komora's own config, printing the value
+# or nothing. Uses `git config --file` as the INI parser rather than hand-
+# rolling one — the file is git-shaped by design, so git is the right reader.
+# A missing file is not an error here: "no identity set yet" and "file absent"
+# are the same state to every caller.
+komora_config_get() {
+  local key="$1" file; file="$(komora_config_file)"
+  [[ -f "$file" ]] || return 0
+  git config --file "$file" "$key" 2>/dev/null || true
+}
+
+# `komora git config` — read and write the git identity in komora's own global
+# config (#27). Follows git's vocabulary so it is guessable:
+#
+#   komora git config user.name  "Ada Lovelace"   # set
+#   komora git config user.email "ada@example.com" # set
+#   komora git config                              # show what is set
+#
+# Only user.name and user.email are accepted; komora's config is not a general
+# git config store. Writing creates the config dir and file on demand — git
+# config --file does the latter, this does the former.
+cmd_git() {
+  [[ "${1:-}" == "config" ]] || {
+    echo "komora: unknown git subcommand '${1:-}'" >&2
+    echo "  the only supported form is: komora git config [user.name|user.email [value]]" >&2
+    return 2
+  }
+  shift
+
+  local file; file="$(komora_config_file)"
+
+  # No key: show the current identity, and say clearly when none is set.
+  if [[ $# -eq 0 ]]; then
+    local name email; name="$(komora_config_get user.name)"; email="$(komora_config_get user.email)"
+    if [[ -z "$name" && -z "$email" ]]; then
+      echo "komora: no git identity set"
+      echo "  set one with:"
+      echo "    komora git config user.name  \"Your Name\""
+      echo "    komora git config user.email \"you@example.com\""
+      return 0
+    fi
+    echo "user.name  ${name:-（unset）}"
+    echo "user.email ${email:-（unset）}"
+    return 0
+  fi
+
+  local key="$1"; shift
+  case "$key" in
+    user.name|user.email) ;;
+    *)
+      echo "komora: komora git config only manages user.name and user.email" >&2
+      echo "  got '$key'" >&2
+      return 2 ;;
+  esac
+
+  # Key only: read that one value.
+  if [[ $# -eq 0 ]]; then
+    komora_config_get "$key"
+    return 0
+  fi
+
+  # Key + value: write it, creating the config dir on demand.
+  local value="$1"
+  plan mkdir -p "$(dirname "$file")"
+  plan git config --file "$file" "$key" "$value"
 }
 
 cmd_ls() {
@@ -319,15 +427,64 @@ driver_config_json() {
     "$repo_vol" "$SANDBOX_REPO_DIR" "$profile_vol" "$SANDBOX_CONFIG_DIR"
 }
 
-# The in-sandbox command for a first-time launch: clone the repo into the
-# (primed, empty-but-for-.keep) repo volume, then hand off to whatever final
-# command the caller wants running (the agent, or a shell — #19). `rm -f
-# .keep` clears the priming marker that would otherwise make `git clone`'s
-# target look non-empty and refuse (#18, verified live).
+# Emits the in-sandbox shell fragment that writes the chamber's git identity
+# fresh, to be prepended to the launch command on both the create and resume
+# paths (#27). ADR-0003: synthesized every start, never mounted — so this runs
+# on every launch, overwriting whatever a previous start wrote.
+#
+# The identity values come from komora's *host* config (komora_config_get) and
+# are interpolated into a `git config --file SANDBOX_GITCONFIG` call that runs
+# *inside* the chamber, where the profile volume is mounted and writable and
+# where GIT_CONFIG_GLOBAL points git. Values are single-quoted with the standard
+# '\'' escape so a name containing a quote cannot break out of the command.
+#
+# When neither value is set the fragment is a single `:` no-op — nothing to
+# synthesize. The warning about that (warn_unset_identity) is a host-side
+# concern printed before handoff, not baked into the in-chamber command, so the
+# chamber command stays about writing config and the warning reaches the user's
+# terminal directly.
+chamber_gitconfig_snippet() {
+  local name email
+  name="$(komora_config_get user.name)"
+  email="$(komora_config_get user.email)"
+
+  [[ -z "$name" && -z "$email" ]] && { printf ':'; return 0; }
+
+  local out=""
+  # rm any stale file first: a value cleared in komora's config must clear in
+  # the chamber too, and `git config --unset` on an absent key would error.
+  out+="rm -f $SANDBOX_GITCONFIG;"
+  [[ -n "$name" ]]  && out+=" git config --file $SANDBOX_GITCONFIG user.name '${name//\'/\'\\\'\'}';"
+  [[ -n "$email" ]] && out+=" git config --file $SANDBOX_GITCONFIG user.email '${email//\'/\'\\\'\'}';"
+  printf '%s' "$out"
+}
+
+# Warns, on the host, when no git identity is configured — actionable, naming
+# both fix commands, and never blocking (#27). ADR-0003 §5's warn-and-confirm
+# was withdrawn: a confirmation prompt on the daily launch path is exactly the
+# ceremony the zero-ceremony Must exists to prevent. So this prints and returns;
+# the chamber starts regardless. It fires on every start while identity is
+# unset — deliberately, since a silent warning is one that never gets acted on.
+warn_unset_identity() {
+  local name email
+  name="$(komora_config_get user.name)"
+  email="$(komora_config_get user.email)"
+  [[ -n "$name" || -n "$email" ]] && return 0
+  echo "komora: no git identity configured — commits inside this chamber will have none" >&2
+  echo "  set one (persists across chambers):" >&2
+  echo "    komora git config user.name  \"Your Name\"" >&2
+  echo "    komora git config user.email \"you@example.com\"" >&2
+}
+
+# The in-sandbox command for a first-time launch: write the git identity (#27),
+# clone the repo into the (primed, empty-but-for-.keep) repo volume, then hand
+# off to whatever final command the caller wants running (the agent, or a
+# shell — #19). `rm -f .keep` clears the priming marker that would otherwise
+# make `git clone`'s target look non-empty and refuse (#18, verified live).
 launch_command() {
   local repo_id="$1" final="$2" dir="$SANDBOX_REPO_DIR"
-  printf 'if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec env %s %s' \
-    "$dir" "$dir" "$repo_id" "$dir" "$dir" "$SANDBOX_CONFIG_ENV" "$final"
+  printf '%s if [ ! -d %s/.git ]; then rm -f %s/.keep; git clone https://github.com/%s.git %s; fi; cd %s && exec env %s %s' \
+    "$(chamber_gitconfig_snippet)" "$dir" "$dir" "$repo_id" "$dir" "$dir" "$SANDBOX_CONFIG_ENV" "$final"
 }
 
 # Resolves the --policy path for a create, setting the KOMORA_POLICY_PATH
@@ -414,6 +571,11 @@ launch_into() {
 
   local name; name="$(sandbox_name "$slug")"
 
+  # Warn (never block) if no git identity is set (#27). Fires on both the
+  # create and resume branches, since either lands a chamber whose commits
+  # would carry no author, so the check belongs above the branch.
+  warn_unset_identity
+
   if sandbox_exists "$name"; then
     echo "komora: resuming sandbox '$name' for $repo_id" >&2
     # No credential staging on resume (#30): the credential lives in the
@@ -422,7 +584,13 @@ launch_into() {
     # for komora to restage. The clone already exists by construction (a
     # sandbox only ever gets created after cloning), so resuming just lands in
     # it and hands off.
-    plan openshell sandbox exec --name "$name" --tty -- sh -c "cd $SANDBOX_REPO_DIR && exec env $SANDBOX_CONFIG_ENV $final"
+    #
+    # The git identity IS rewritten on resume (#27): ADR-0003 synthesizes it
+    # every start, and a value changed in komora's config since the sandbox was
+    # created must reach a resumed chamber too — a create-only write would go
+    # stale the moment identity changed. Same rationale CLAUDE_CONFIG_DIR is set
+    # on both branches.
+    plan openshell sandbox exec --name "$name" --tty -- sh -c "$(chamber_gitconfig_snippet) cd $SANDBOX_REPO_DIR && exec env $SANDBOX_CONFIG_ENV $final"
     return
   fi
 
@@ -745,6 +913,7 @@ main() {
     rm)    cmd_rm "$@" ;;
     shell) cmd_shell "$@" ;;
     id)    cmd_id "$@" ;;
+    git)   cmd_git "$@" ;;
     -h|--help) usage; exit 0 ;;
     "")    cmd_run ;;
     *)
