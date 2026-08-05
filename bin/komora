@@ -562,12 +562,55 @@ komora_cleanup_policy_tmps() {
   done
 }
 
+# Read-only preflight: verify an OpenShell gateway is reachable before any
+# sandbox operation, so a missing gateway fails up front with an actionable
+# message rather than partway through `sandbox create` with an error that reads
+# like a komora bug (#20).
+#
+# komora does NOT manage the gateway — installing it, configuring it, and
+# choosing the compute driver stay the developer's, so an OpenShell upgrade does
+# not fight the wrapper (map Notes). This check therefore only *reads*: it never
+# writes gateway config, never installs, never selects a driver.
+#
+# `openshell status` is the probe. It is purpose-built ("Show gateway status and
+# information"), read-only, and — unlike `gateway list`, which reads only local
+# registration metadata — it actually contacts the gateway, so its exit code
+# answers the question the ticket asks ("reachable", not merely "configured"):
+# 0 when a gateway responds, non-zero when none does (verified against 0.0.93).
+# Its own stdout/stderr is suppressed; komora speaks the outcome in its own
+# voice so the developer sees actionable next steps, not a raw CLI dump.
+#
+# Skipped under --dry-run, which must stay side-effect-free and require no live
+# gateway to plan (#15's seam). A marker line records where the live check would
+# run, satisfying "clearly marked as the only command actually executed" (#20).
+gateway_preflight() {
+  if [[ "$KOMORA_DRY_RUN" -eq 1 ]]; then
+    printf 'openshell status  # gateway preflight (skipped under --dry-run)\n'
+    return 0
+  fi
+
+  openshell status >/dev/null 2>&1 && return 0
+
+  echo "komora: no reachable OpenShell gateway" >&2
+  echo "  komora needs a running gateway but does not manage one — that is yours to set up." >&2
+  echo "  check what komora can see:      openshell status" >&2
+  echo "  diagnose a gateway that is up:  openshell doctor" >&2
+  echo "  register or start one:          openshell gateway add <endpoint>" >&2
+  echo "  (see the OpenShell docs for installing and running a gateway)" >&2
+  return 1
+}
+
 # Shared create-or-resume path for both cmd_run and cmd_shell (#14, #18,
 # #19). The agent and a shell need identical volumes, priming, and collision
 # handling — only the final command exec'd inside the sandbox varies, so
 # that's the one thing parameterized here.
 launch_into() {
   local repo_id="$1" slug="$2" final="$3"
+
+  # Fail fast on an unreachable gateway, before any sandbox work (#20). Both
+  # the create and resume branches below drive the gateway, so the check
+  # belongs above them.
+  gateway_preflight || return 1
 
   local name; name="$(sandbox_name "$slug")"
 
