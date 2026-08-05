@@ -1,9 +1,51 @@
 # ADR-0002: Ownership machinery around keep-id
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0005](0005-clone-inside-a-thin-wrapper-around-openshell.md) (2026-08-05, [#26](https://github.com/arteven/komora/issues/26)) — except the uid rule, narrowed below
 - **Date**: 2026-07-27
 - **Ticket**: [#5 Build the ownership machinery around keep-id](https://github.com/arteven/komora/issues/5)
 - **Builds on**: [#2 rootless-ownership research](https://github.com/arteven/komora/blob/research/ownership-probes/docs/research/rootless-ownership.md)
+
+## Superseded: there is no host repo to own
+
+**Do not resurrect the machinery below.** All four numbered sections solve one
+problem — keeping a **bind-mounted host repo** correctly owned across the
+rootless userns boundary — and the clone-inside architecture
+([ADR-0005](0005-clone-inside-a-thin-wrapper-around-openshell.md)) deletes that
+problem rather than solving it. The repo is cloned *inside* the sandbox onto a
+named volume. No host directory is mounted, so nothing on the host can acquire
+the wrong owner.
+
+komora also no longer passes `--userns` at all: OpenShell's Podman driver
+exposes no userns knob, and komora drives that CLI rather than `podman run`
+directly. Chamber-side chown repair, escape mode, and `podman unshare`
+recovery all have nothing left to act on.
+
+The findings were **correct and verified** — they were simply made obsolete by
+an architecture change, not disproved. §What the awkward cases showed remains an
+accurate record of how `keep-id` behaves.
+
+### What survives, narrowed to one use
+
+The rule in §The rule behind all of it stands, demoted from an architectural
+constraint to a **volume-priming** rule — the only place it still bites:
+
+> A uid number only means something **relative to a userns mapping**.
+
+Priming a fresh named volume must **write** as the sandbox uid, because Podman's
+first-mount auto-chown targets container root, not the uid OpenShell's
+supervisor setuid()s down to. A run that merely *mounts* does not trigger the
+chown, so an unprimed volume mounts fine and is then unwritable by the agent.
+The uid is resolved from the image at runtime, never hardcoded
+([#17](https://github.com/arteven/komora/issues/17)); see `prime_volume` in
+`bin/komora`.
+
+### A correction worth keeping
+
+Recorded because it was asserted before being checked, and would otherwise
+mislead a reader reconstructing why clone-inside won: **`keep-id` does not
+preclude a root-dropping supervisor.** A keep-id container does have a usable
+container root. The real obstacle to bind-mounting through OpenShell is
+narrower and unrelated — its Podman driver exposes no userns knob at all.
 
 ## Context
 

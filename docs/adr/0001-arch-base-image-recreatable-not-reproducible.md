@@ -1,8 +1,31 @@
 # ADR-0001: Arch base image — recreatable, not reproducible
 
-- **Status**: Accepted
+- **Status**: Superseded in part by [ADR-0005](0005-clone-inside-a-thin-wrapper-around-openshell.md) (2026-08-05, [#26](https://github.com/arteven/komora/issues/26))
 - **Date**: 2026-07-27
 - **Ticket**: [#4 Choose the chamber image](https://github.com/arteven/komora/issues/4)
+
+## Superseded: komora no longer builds an image
+
+komora does not build, own, or choose a chamber image any more. Under the
+clone-inside architecture ([ADR-0005](0005-clone-inside-a-thin-wrapper-around-openshell.md))
+it is a thin wrapper around the `openshell` CLI, and the image is the community
+base image OpenShell ships. There is no Containerfile, no `pacman -Syu` at build
+time, and no base-distro choice left to make.
+
+**This ADR was not wrong.** It answered "which base distro should komora's own
+image use", and that question no longer exists — the whole decision was
+dissolved by an architecture change, not overturned by better evidence about
+Arch. Read §Decision as history.
+
+**One part survives, and is load-bearing:** the *recreatable, not reproducible*
+distinction below, and the test it yields. That rule outlived the image it was
+decided about, and now governs volume persistence instead — see
+[CONTEXT.md](../../CONTEXT.md) and §The generalisation.
+
+Applying the test to the architecture that replaced this one: session history
+was the one thing that failed it. History is genuinely irreplaceable, so it may
+not sit in a sandbox's writable layer — which is why it lives in the **profile
+volume**, and why `destroy` is safe by construction.
 
 ## Context
 

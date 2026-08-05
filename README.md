@@ -4,7 +4,10 @@ A thin wrapper around the `openshell` CLI. See [CONTEXT.md](CONTEXT.md) for the
 domain, and the wayfinder map [#1](https://github.com/arteven/komora/issues/1)
 for the route, current decisions, and open work.
 
-Architecture detail — user stories, testing seams, and the evidence base — lives
+The architecture — the repo is cloned **inside** an OpenShell sandbox, with two
+persistent named volumes outliving it — is recorded in
+[ADR-0005](docs/adr/0005-clone-inside-a-thin-wrapper-around-openshell.md).
+Further detail (user stories, testing seams, the `0.0.93` evidence base) lives
 in [#14](https://github.com/arteven/komora/issues/14), which is closed and
 carries corrections; the map is the current view.
 
@@ -55,6 +58,13 @@ Podman 6.0.1, on the developer's machine.
 Run against real `openshell` (v0.0.93) and Podman 6.0.1 on the developer's
 machine, targeting `arteven/komora`. Every sandbox and volume created during
 this test was deleted afterward; nothing was left live.
+
+> **Historical note (#30).** The credential rows below describe staging the
+> agent credential from the host, which komora **no longer does** — the profile
+> volume starts empty and login happens *inside* the chamber. The rows are kept
+> as an accurate record of what was verified at the time; do not read them as
+> current behaviour. The `credential copy permission` bug row below is likewise
+> for a code path that no longer exists.
 
 | Check | Result |
 | --- | --- |

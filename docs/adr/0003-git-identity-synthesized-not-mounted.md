@@ -90,6 +90,40 @@ same "append a correction, don't rewrite history" discipline the map uses.
 7. **§6 (per-profile override) stays deferred** as map fog — identity is global
    for now. §7 (signing declined) stands unchanged.
 
+## Amendment (2026-08-05, #26): how the rule generalised, and how it did not
+
+#26 set out to generalise this ADR "from git identity to credential staging".
+That framing is now wrong, and the correction is worth more than the
+generalisation would have been: **komora stages no credential at all.** #30
+removed host credential derivation wholesale — the profile volume starts empty
+and the developer logs in *inside* the chamber. There is no staging path left
+for this rule to extend to.
+
+What the rule generalised into instead is **two rules pointing in opposite
+directions**, which together cover everything that crosses the chamber boundary:
+
+1. **Synthesize, never mount** (this ADR, unchanged) governs what komora writes
+   **into** a chamber: pull *named values* and rewrite them on every start, so
+   the chamber holds a copy and never the truth. Applies to derived config.
+
+2. **A tool's state is not all in the directory it names**
+   ([#29](https://github.com/arteven/komora/issues/29)) governs what a tool
+   writes **out**. Claude Code keeps its credential, sessions, and history in
+   `~/.claude/` but its account binding in `~/.claude.json` — a *sibling*.
+   Mounting the directory persisted the secret and lost the identity, so a fresh
+   chamber was authenticated yet showed onboarding. Before trusting a mount to
+   persist a tool, enumerate what the tool writes and where; where the tool
+   offers a single-root override (`CLAUDE_CONFIG_DIR`), prefer it to guessing
+   the layout.
+
+For a secret that must authenticate *outbound* traffic, neither applies — that
+is [ADR-0004](0004-git-push-credential-pat-at-the-proxy.md)'s **inject at the
+proxy, never in the chamber**, which keeps the secret out of the blast radius
+entirely rather than deciding how it gets in.
+
+So the honest summary: this ADR's rule stayed exactly as wide as it was, and the
+adjacent problems got their own rules rather than being absorbed into this one.
+
 ## Decision
 
 ### 1. Synthesize, never mount
