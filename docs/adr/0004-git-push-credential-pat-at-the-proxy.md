@@ -36,19 +36,53 @@ This is strictly better than "pass a file path, never the secret": there is no
 secret file to pass at all. The token never enters the chamber in any form —
 not argv, not environment, not a mounted file, not a volume.
 
-**Provider and policy compose; neither works alone.** This is the reconciliation
-of an apparent contradiction the codebase carried: the policy provenance header
-records that a custom `github` *provider profile* "composes nothing" for push.
-Both halves are true and they are different halves:
+**Push needs THREE halves; none works alone.** This is the reconciliation of an
+apparent contradiction the codebase carried: the policy provenance header records
+that a custom `github` *provider profile* "composes nothing" for push. All three
+are true and they are different pieces:
 
 - the builtin github profile *authenticates* github.com, but its own L7 rules
   allow only `git-upload-pack` (fetch/clone), **not** `git-receive-pack` (push);
 - komora's vendored policy adds the `git-receive-pack` allow rule, but injects
-  no credential.
+  no credential;
+- git itself **will not send an authenticated request** to github.com without a
+  git-side credential configured — with none it prompts for a username and, being
+  non-interactive in the chamber, dies with `fatal: could not read Username for
+  'https://github.com'` *before any request reaches the proxy* (verified live).
 
-The provider alone opens no push path (policy blocks `git-receive-pack`); the
-policy alone signs nothing (no credential). Together the policy opens the push
-path and the provider signs it. That is the whole mechanism.
+So there are three pieces, learned the hard way during #22's live bring-up:
+
+1. **policy** opens the push path (`git-receive-pack` allow rule);
+2. **provider** holds the real PAT and injects it at the proxy;
+3. **a git-side `url.insteadOf` rewrite** makes git actually emit an
+   authenticated request carrying the provider's placeholder, which the proxy
+   then rewrites to the real token.
+
+The third piece is the one that surprised us: the provider injects a `GITHUB_TOKEN`
+env var into the chamber, but **git does not read `GITHUB_TOKEN` on its own** — it
+is not a credential-source git knows about. The placeholder must be woven into a
+credential git *will* use. komora writes, into the chamber's `GIT_CONFIG_GLOBAL`
+on every start:
+
+```
+git config url."https://x-access-token:$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/"
+```
+
+`$GITHUB_TOKEN` is expanded **inside the chamber**, so it captures OpenShell's
+current opaque, revision-scoped placeholder (`openshell:resolve:env:v<N>_GITHUB_TOKEN`)
+— komora never handles the value, and rotation stays transparent. git then sends
+that placeholder as an HTTP Basic password; the proxy's Basic-rewrite path swaps in
+the real PAT on the wire. The rewrite is guarded on `[ -n "$GITHUB_TOKEN" ]` so it
+is inert when no provider is attached, and it is re-synthesized on resume for the
+same reason identity is (ADR-0003): a create-only write goes stale when the
+placeholder revision rotates.
+
+Two forms were tried and rejected in favour of `insteadOf`: an
+`http.<url>.extraheader` carrying `Authorization: Bearer $GITHUB_TOKEN` — which
+**git 2.43 ignores for its credential decision**, still prompting for a username
+(verified live via `ls-remote`) — and embedding the credential in each remote's
+URL, which is per-clone rather than a single global rule. `insteadOf` is the one
+form that is both global and one git actually authenticates with.
 
 ## Decision
 
@@ -157,7 +191,10 @@ exposure:**
 - **komora reads the name of a credential variable, never its value.** This
   boundary — komora wires the credential path without ever handling the secret —
   is a property worth preserving in any future credential komora brokers.
-- The policy delta and the provider wiring are **two halves of one capability**;
-  a future re-vendor that drops the `git-receive-pack` rule silently disables
-  push even with the provider intact. The policy's ticket-cited delta comment and
-  this ADR are the paired record of why the rule is there.
+- The policy delta, the provider wiring, and the git-side `url.insteadOf`
+  rewrite are **three pieces of one capability**; dropping any one silently
+  disables push while the other two still look correct — a re-vendor that drops
+  the `git-receive-pack` rule, a launch with no provider, or a change to the
+  chamber gitconfig synthesis that omits the rewrite. The policy's ticket-cited
+  delta comment, `chamber_gitconfig_snippet`'s push-credential block, and this
+  ADR are the linked record of why all three are there.

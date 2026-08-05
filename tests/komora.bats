@@ -1074,25 +1074,28 @@ EOF
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
-@test "run with no identity synthesizes nothing — the chamber snippet is a bare no-op" {
+@test "run with no identity writes no user.name/user.email, but still emits the push-credential guard" {
   local os_dir; os_dir="$(fake_openshell_sandbox_get)"
   local pm_dir; pm_dir="$(fake_podman_priming "998")"
   local cred_dir; cred_dir="$(fake_credential_dir)"
   PATH="$os_dir:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
   assert_success
-  # no `git config --file` write in the in-chamber command when identity is unset
-  refute_output --partial "git config --file"
-  # the create path always passes GIT_CONFIG_GLOBAL so git finds the file once
-  # one is written on a later start
+  # no identity write when name/email are unset (the warning text mentions
+  # `user.name`, so assert on the chamber write's `--file … user.name` form)
+  refute_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name'
+  refute_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.email'
+  # the create path always passes GIT_CONFIG_GLOBAL so git finds the file
   assert_output --partial "GIT_CONFIG_GLOBAL=/sandbox/.claude/gitconfig"
-  # the no-op must be a COMPLETE statement (':;'), never a bare ':' — spliced
-  # before `if [ ! -d … ]`, a bare ':' swallows the `if` as its arguments and
-  # orphans `then` → `sh: Syntax error: "then" unexpected`. Assert the emitted
-  # in-chamber command actually parses under /bin/sh, the guard Bug B slipped.
-  # The plan trace %q-quotes the whole `sh -c` argument, so ':; if …' renders as
-  # ':\;\ if\ …'. A bare ':' (Bug B) would render 'sh -c : if …' — the space
-  # between ':' and 'if' unescaped and unquoted, orphaning `then` in the chamber.
-  assert_output --partial 'sh -c :\;\ if\ \[\ \!\ -d'
+  # The chamber command must parse under /bin/sh: the snippet leads with a
+  # complete `rm -f …;` (not a bare ':') so the following `if [ ! -d … ]` is a
+  # statement, not swallowed as arguments (the Bug B class → `then` unexpected).
+  # The plan trace %q-quotes the whole `sh -c` arg, so `rm -f …; if …` renders
+  # with escaped spaces/semicolons.
+  assert_output --partial 'sh -c rm\ -f\ /sandbox/.claude/gitconfig\;'
+  # push credential is emitted regardless of identity, guarded on the in-chamber
+  # $GITHUB_TOKEN placeholder the provider injects (#22, ADR-0004)
+  assert_output --partial 'if\ \[\ -n\ \"\$GITHUB_TOKEN\"\ \]\;\ then'
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
 }
 
@@ -1127,6 +1130,34 @@ EOF
   refute_output --partial "git clone"
   assert_output --partial 'git\ config\ --file\ /sandbox/.claude/gitconfig\ user.name\ \'"'"'Ada\ Lovelace\'"'"''
   rm -rf "$os_dir" "$pm_dir" "$cred_dir"
+}
+
+@test "the git-side push credential (url.insteadOf) is synthesized on create AND resume (#22)" {
+  # Push needs THREE halves (ADR-0004): the policy git-receive-pack rule, the
+  # proxy-injected provider, and this git-side rewrite that makes git actually
+  # SEND an authenticated request (git won't push a request it thinks is
+  # anonymous — verified live: "could not read Username"). Like identity, the
+  # rewrite is synthesized every start so a resumed chamber and a rotated
+  # placeholder both stay wired; unlike identity, it is guarded on the in-chamber
+  # $GITHUB_TOKEN so it is inert when no provider is attached.
+  local pm_dir; pm_dir="$(fake_podman_priming "998")"
+  local cred_dir; cred_dir="$(fake_credential_dir)"
+
+  # create path
+  local os_create; os_create="$(fake_openshell_sandbox_get)"
+  PATH="$os_create:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial 'if\ \[\ -n\ \"\$GITHUB_TOKEN\"\ \]\;\ then'
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
+  rm -rf "$os_create"
+
+  # resume path (sandbox already exists) — the rewrite must ride along here too
+  local os_resume; os_resume="$(fake_openshell_sandbox_get "$ARTEVEN_KOMORA_SANDBOX_NAME")"
+  PATH="$os_resume:$pm_dir:$PATH" CLAUDE_CONFIG_DIR="$cred_dir" run "$KOMORA_BIN" --dry-run run arteven/komora
+  assert_success
+  assert_output --partial "sandbox exec"
+  assert_output --partial 'url.\"https://x-access-token:\$GITHUB_TOKEN@github.com/\".insteadOf\ \"https://github.com/\"'
+  rm -rf "$os_resume" "$pm_dir" "$cred_dir"
 }
 
 @test "a value containing a single quote is safely quoted in the chamber command" {

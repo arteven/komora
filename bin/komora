@@ -532,10 +532,11 @@ driver_config_json() {
     "$repo_vol" "$SANDBOX_REPO_DIR" "$profile_vol" "$SANDBOX_CONFIG_DIR"
 }
 
-# Emits the in-sandbox shell fragment that writes the chamber's git identity
-# fresh, to be prepended to the launch command on both the create and resume
-# paths (#27). ADR-0003: synthesized every start, never mounted — so this runs
-# on every launch, overwriting whatever a previous start wrote.
+# Emits the in-sandbox shell fragment that writes the chamber's git config
+# fresh — identity (#27) and the git-side push credential (#22) — prepended to
+# the launch command on both the create and resume paths. ADR-0003: synthesized
+# every start, never mounted, so this runs on every launch, overwriting whatever
+# a previous start wrote into SANDBOX_GITCONFIG.
 #
 # The identity values come from komora's *host* config (komora_config_get) and
 # are interpolated into a `git config --file SANDBOX_GITCONFIG` call that runs
@@ -543,28 +544,63 @@ driver_config_json() {
 # where GIT_CONFIG_GLOBAL points git. Values are single-quoted with the standard
 # '\'' escape so a name containing a quote cannot break out of the command.
 #
-# When neither value is set the fragment is a single `:` no-op — nothing to
-# synthesize. The warning about that (warn_unset_identity) is a host-side
-# concern printed before handoff, not baked into the in-chamber command, so the
-# chamber command stays about writing config and the warning reaches the user's
-# terminal directly.
+# The push credential is the third half of git-push (#22, ADR-0004): the policy
+# opens git-receive-pack and the provider injects the real PAT at the proxy, but
+# git will not *send* a request it thinks is unauthenticated — it prompts for a
+# username and, non-interactive, dies with "could not read Username" (verified
+# live). So komora writes a url.insteadOf rewrite that makes every github.com
+# URL carry `x-access-token:$GITHUB_TOKEN` as a Basic credential; the proxy
+# rewrites that placeholder to the real token on the wire. Three properties earn
+# this exact form:
+#   - $GITHUB_TOKEN is expanded *in the chamber*, not by komora — the chamber
+#     holds only OpenShell's opaque placeholder (komora never sees a token,
+#     ADR-0004), and the placeholder is revision-scoped (openshell:resolve:env:
+#     v<N>_GITHUB_TOKEN), so referencing the live var survives credential
+#     rotation where a hardcoded string would not.
+#   - It is guarded by a chamber-side `[ -n "$GITHUB_TOKEN" ]`, so it is inert
+#     when no provider is attached (no placeholder in the env) — the snippet can
+#     be emitted unconditionally on both create and resume without threading the
+#     host-side KOMORA_GH_PROVIDER through, and it self-heals a resumed chamber
+#     whose placeholder revision changed.
+#   - insteadOf, not http.extraheader: git 2.43 ignores an Authorization
+#     extraheader for its credential decision and still prompts for a username
+#     (verified live via ls-remote), whereas a Basic credential in the rewritten
+#     URL is a credential git will actually use.
+#
+# When there is nothing to write — no identity AND (structurally) the push guard
+# still emits, so the fragment is only a bare no-op when identity is unset; the
+# push guard always rides along because its cost when absent is one shell test.
+# The no-op path returns a complete ':;' statement (not a bare ':'): launch_command
+# splices this immediately before `if [ ! -d … ]`, and a bare ':' would swallow
+# that `if` as its arguments (terminated only by the first ';'), orphaning `then`
+# → `sh: Syntax error: "then" unexpected`. The trailing ';' closes the no-op.
+#
+# warn_unset_identity / warn_no_gh_token are host-side concerns printed before
+# handoff, not baked into this command, so the chamber command stays about
+# writing config and the warnings reach the user's terminal directly.
 chamber_gitconfig_snippet() {
   local name email
   name="$(komora_config_get user.name)"
   email="$(komora_config_get user.email)"
 
-  # A complete no-op statement (':;', not a bare ':'): launch_command splices
-  # this immediately before `if [ ! -d … ]`, and a bare ':' would swallow that
-  # `if` as its arguments (terminated only by the first ';'), orphaning `then`
-  # → `sh: Syntax error: "then" unexpected`. The trailing ';' closes the no-op.
-  [[ -z "$name" && -z "$email" ]] && { printf ':;'; return 0; }
-
   local out=""
   # rm any stale file first: a value cleared in komora's config must clear in
-  # the chamber too, and `git config --unset` on an absent key would error.
+  # the chamber too, and `git config --unset` on an absent key would error. The
+  # rewrite below is re-added fresh, so a rotated placeholder never goes stale.
   out+="rm -f $SANDBOX_GITCONFIG;"
   [[ -n "$name" ]]  && out+=" git config --file $SANDBOX_GITCONFIG user.name '${name//\'/\'\\\'\'}';"
   [[ -n "$email" ]] && out+=" git config --file $SANDBOX_GITCONFIG user.email '${email//\'/\'\\\'\'}';"
+  # Push credential (#22): only when the provider injected a placeholder into
+  # the chamber env. $GITHUB_TOKEN stays single-quoted ON PURPOSE so the
+  # *chamber* shell expands it, not komora — the token, even as an opaque
+  # placeholder, is never a komora value (ADR-0004). SC2016 flags the very
+  # non-expansion this relies on.
+  # shellcheck disable=SC2016
+  out+=' if [ -n "$GITHUB_TOKEN" ]; then'
+  out+=" git config --file $SANDBOX_GITCONFIG"
+  # shellcheck disable=SC2016
+  out+=' url."https://x-access-token:$GITHUB_TOKEN@github.com/".insteadOf "https://github.com/";'
+  out+=' fi;'
   printf '%s' "$out"
 }
 

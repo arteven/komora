@@ -65,6 +65,10 @@ outbound traffic from the blast radius (the git-push PAT) is held in gateway
 state and added as a bearer header by the egress proxy; the chamber sees only an
 opaque placeholder, never the token. Possession is the exposure, so removing
 possession while keeping *use* is the win: the credential cannot be exfiltrated,
-only spent through the proxy while the chamber is live. Push needs **both** this
-credential *and* the policy's `git-receive-pack` rule — neither works alone. See
+only spent through the proxy while the chamber is live. Push needs **three**
+pieces, none sufficient alone: this proxy-injected credential, the policy's
+`git-receive-pack` rule, *and* a git-side `url.insteadOf` rewrite that makes git
+actually send an authenticated request (git does not read `GITHUB_TOKEN` on its
+own; with no configured credential it prompts for a username and, non-interactive,
+fails before reaching the proxy). See
 [ADR-0004](docs/adr/0004-git-push-credential-pat-at-the-proxy.md).
